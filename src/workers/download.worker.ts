@@ -10,11 +10,13 @@ import { GridFSBucket } from 'mongodb';
 
 dotenv.config();
 
-const connection = new IORedis({
-  host: process.env.REDIS_HOST || '127.0.0.1',
-  port: parseInt(process.env.REDIS_PORT || '6379'),
-  maxRetriesPerRequest: null
-});
+const connection = process.env.REDIS_URL 
+  ? new IORedis(process.env.REDIS_URL, { maxRetriesPerRequest: null })
+  : new IORedis({
+      host: process.env.REDIS_HOST || '127.0.0.1',
+      port: parseInt(process.env.REDIS_PORT || '6379'),
+      maxRetriesPerRequest: null
+    });
 
 const TMP_DIR = path.join(__dirname, '../../tmp');
 if (!fs.existsSync(TMP_DIR)) {
