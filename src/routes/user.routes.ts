@@ -6,14 +6,19 @@ import { protect, AuthRequest } from '../middleware/auth';
 
 const router = Router();
 
-router.get('/:id', async (req: Request, res: Response): Promise<void> => {
+// ── Protected /me routes MUST come before /:id ──
+
+router.get('/me', protect, async (req: AuthRequest, res: Response): Promise<void> => {
   try {
-    const user = await User.findById(req.params.id).select('-password');
+    const user = await User.findById(req.user?.id).select('-password');
     if (!user) {
       res.status(404).json({ error: 'User not found' });
       return;
     }
-    res.json(user);
+    res.json({
+      ...user.toObject(),
+      isGuest: user.email.endsWith('@knot.local'),
+    });
   } catch (error) {
     res.status(500).json({ error: (error as Error).message });
   }
@@ -26,18 +31,18 @@ router.put('/me', protect, async (req: AuthRequest, res: Response): Promise<void
       res.status(404).json({ error: 'User not found' });
       return;
     }
-    
+
     user.displayName = req.body.displayName || user.displayName;
     user.avatar = req.body.avatar || user.avatar;
     user.bio = req.body.bio || user.bio;
-    
+
     await user.save();
     res.json({
       _id: user._id,
       displayName: user.displayName,
       email: user.email,
       avatar: user.avatar,
-      bio: user.bio
+      bio: user.bio,
     });
   } catch (error) {
     res.status(500).json({ error: (error as Error).message });
@@ -75,6 +80,21 @@ router.get('/me/downloads', protect, async (req: AuthRequest, res: Response): Pr
       .populate('knot_version_id')
       .sort({ downloaded_at: -1 });
     res.json(downloads);
+  } catch (error) {
+    res.status(500).json({ error: (error as Error).message });
+  }
+});
+
+// ── Public routes ──
+
+router.get('/:id', async (req: Request, res: Response): Promise<void> => {
+  try {
+    const user = await User.findById(req.params.id).select('-password');
+    if (!user) {
+      res.status(404).json({ error: 'User not found' });
+      return;
+    }
+    res.json(user);
   } catch (error) {
     res.status(500).json({ error: (error as Error).message });
   }
