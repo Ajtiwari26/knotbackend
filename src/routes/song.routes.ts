@@ -1,13 +1,71 @@
 import { Router, Request, Response } from 'express';
 import { getSongMetadata, enqueueDownload, createSong } from '../controllers/song.controller';
 import Song from '../models/Song';
-import youtubedl from 'youtube-dl-exec';
 import mongoose from 'mongoose';
 import { GridFSBucket, ObjectId } from 'mongodb';
 import { searchYouTube, getVideoDetails } from '../services/youtube.service';
 import redisClient from '../config/redis';
+import { exec } from 'child_process';
+import fs from 'fs';
+import path from 'path';
 
 const router = Router();
+
+// ─── Cookie Setup ─────────────────────────────────────────────────────────────
+// Write YouTube cookies from base64 env var to a temp file on startup.
+// This allows yt-dlp to authenticate as a real browser session.
+const COOKIE_PATH = '/tmp/youtube-cookies.txt';
+
+function ensureCookieFile(): boolean {
+  const b64 = process.env.YT_COOKIES_BASE64;
+  if (!b64) {
+    console.warn('[Cookies] YT_COOKIES_BASE64 not set — yt-dlp may be blocked by YouTube');
+    return false;
+  }
+  try {
+    fs.writeFileSync(COOKIE_PATH, Buffer.from(b64, 'base64').toString('utf-8'));
+    console.log('[Cookies] YouTube cookie file written to', COOKIE_PATH);
+    return true;
+  } catch (e) {
+    console.error('[Cookies] Failed to write cookie file:', e);
+    return false;
+  }
+}
+
+const hasCookies = ensureCookieFile();
+
+// ─── Helper: extract stream URL via yt-dlp CLI ───────────────────────────────
+function getStreamUrl(videoId: string): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const ytUrl = `https://www.youtube.com/watch?v=${videoId}`;
+    const cookieFlag = hasCookies ? `--cookies ${COOKIE_PATH}` : '';
+
+    const command = [
+      'yt-dlp',
+      cookieFlag,
+      '-f bestaudio',
+      '-g',                    // --get-url: just print the URL, don't download
+      '--no-check-certificates',
+      '--no-warnings',
+      '--force-ipv4',
+      `"${ytUrl}"`,
+    ].filter(Boolean).join(' ');
+
+    exec(command, { timeout: 15000 }, (error, stdout, stderr) => {
+      if (error) {
+        console.error(`[yt-dlp] stderr: ${stderr}`);
+        return reject(new Error(stderr || error.message));
+      }
+      const url = stdout.trim().split('\n')[0]; // first line is the URL
+      if (!url || !url.startsWith('http')) {
+        return reject(new Error('yt-dlp returned invalid URL'));
+      }
+      resolve(url);
+    });
+  });
+}
+
+// ─── Routes ───────────────────────────────────────────────────────────────────
 
 /**
  * YouTube search — uses YouTube Data API v3
@@ -45,7 +103,7 @@ router.get('/search', async (req: Request, res: Response): Promise<void> => {
 });
 
 /**
- * Get stream URL for a YouTube video via yt-dlp.
+ * Get stream URL for a YouTube video via yt-dlp CLI.
  * Caches in Redis for 4 hours (YouTube URLs expire ~6h).
  */
 router.get('/:id/stream-url', async (req: Request, res: Response): Promise<void> => {
@@ -65,18 +123,7 @@ router.get('/:id/stream-url', async (req: Request, res: Response): Promise<void>
       // Redis might be down, continue without cache
     }
 
-    const ytUrl = `https://www.youtube.com/watch?v=${id}`;
-
-    const output = await youtubedl(ytUrl, {
-      getUrl: true,
-      format: 'bestaudio',
-      noCheckCertificates: true,
-      noWarnings: true,
-      forceIpv4: true,
-      extractorArgs: 'youtube:player-client=android',
-    } as any);
-
-    const streamUrl = typeof output === 'string' ? output.trim() : String(output).trim();
+    const streamUrl = await getStreamUrl(id);
 
     // Cache in Redis for 4 hours
     try {

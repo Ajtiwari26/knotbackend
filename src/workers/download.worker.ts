@@ -4,11 +4,14 @@ import dotenv from 'dotenv';
 import path from 'path';
 import fs from 'fs';
 import crypto from 'crypto';
-import youtubedl from 'youtube-dl-exec';
+import { exec } from 'child_process';
 import mongoose from 'mongoose';
 import { GridFSBucket } from 'mongodb';
 
 dotenv.config();
+
+const COOKIE_PATH = '/tmp/youtube-cookies.txt';
+const hasCookies = fs.existsSync(COOKIE_PATH);
 
 const connection = process.env.REDIS_URL 
   ? new IORedis(process.env.REDIS_URL, { maxRetriesPerRequest: null })
@@ -34,16 +37,29 @@ export const downloadWorker = new Worker('download-queue', async (job: Job) => {
   const encryptedFilePath = path.join(TMP_DIR, `${youtube_id}_enc.bin`);
   
   try {
-    // 1. Download MP3
+    // 1. Download MP3 via yt-dlp CLI with cookie auth
     await job.updateProgress(10);
     console.log(`[Worker] Downloading audio for ${youtube_id}...`);
-    await youtubedl(ytUrl, {
-      extractAudio: true,
-      audioFormat: 'mp3',
-      output: rawFilePath,
-      noCheckCertificates: true,
-      noWarnings: true,
-      addHeader: ['referer:youtube.com', 'user-agent:Mozilla/5.0']
+    const cookieFlag = hasCookies ? `--cookies ${COOKIE_PATH}` : '';
+    const dlCommand = [
+      'yt-dlp',
+      cookieFlag,
+      '-x --audio-format mp3',
+      `--output "${rawFilePath}"`,
+      '--no-check-certificates',
+      '--no-warnings',
+      '--force-ipv4',
+      `"${ytUrl}"`,
+    ].filter(Boolean).join(' ');
+
+    await new Promise<void>((resolve, reject) => {
+      exec(dlCommand, { timeout: 120000 }, (error, _stdout, stderr) => {
+        if (error) {
+          console.error(`[Worker] yt-dlp stderr: ${stderr}`);
+          return reject(new Error(stderr || error.message));
+        }
+        resolve();
+      });
     });
     
     // 2. Encrypt the file
