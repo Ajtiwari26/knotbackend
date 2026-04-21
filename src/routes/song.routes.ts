@@ -43,7 +43,7 @@ function getStreamUrl(videoId: string): Promise<string> {
     const command = [
       'yt-dlp',
       cookieFlag,
-      '-f bestaudio',
+      '-f "ba/bestaudio/b"',
       '-g',                    // --get-url: just print the URL, don't download
       '--no-check-certificates',
       '--no-warnings',
@@ -51,12 +51,15 @@ function getStreamUrl(videoId: string): Promise<string> {
       `"${ytUrl}"`,
     ].filter(Boolean).join(' ');
 
+    console.log(`[yt-dlp] Executing: ${command}`);
     exec(command, { timeout: 15000 }, (error, stdout, stderr) => {
       if (error) {
+        console.error(`[yt-dlp] Error for ${videoId}:`, error.message);
         console.error(`[yt-dlp] stderr: ${stderr}`);
         return reject(new Error(stderr || error.message));
       }
       const url = stdout.trim().split('\n')[0]; // first line is the URL
+      console.log(`[yt-dlp] Successfully extracted URL for ${videoId}`);
       if (!url || !url.startsWith('http')) {
         return reject(new Error('yt-dlp returned invalid URL'));
       }
@@ -107,8 +110,9 @@ router.get('/search', async (req: Request, res: Response): Promise<void> => {
  * Caches in Redis for 4 hours (YouTube URLs expire ~6h).
  */
 router.get('/:id/stream-url', async (req: Request, res: Response): Promise<void> => {
+  const id = req.params.id as string;
+  console.log(`[Backend] Requesting stream URL for video: ${id}`);
   try {
-    const id = req.params.id as string;
     const cacheKey = `stream:${id}`;
 
     // Check Redis cache first
