@@ -72,6 +72,8 @@ router.get('/:id/stream-url', async (req: Request, res: Response): Promise<void>
       format: 'bestaudio',
       noCheckCertificates: true,
       noWarnings: true,
+      forceIpv4: true,
+      extractorArgs: 'youtube:player-client=android',
     });
 
     const streamUrl = typeof output === 'string' ? output.trim() : String(output).trim();
