@@ -48,6 +48,7 @@ function getStreamUrl(videoId: string): Promise<string> {
       '--no-check-certificates',
       '--no-warnings',
       '--force-ipv4',
+      '--user-agent "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"',
       `"${ytUrl}"`,
     ].filter(Boolean).join(' ');
 
@@ -215,8 +216,14 @@ function proxyAudioUrl(
   url: string,
   req: Request,
   res: Response,
-  onRetry?: () => void
+  onRetry?: () => void,
+  redirectCount: number = 0
 ) {
+  if (redirectCount > 3) {
+    res.status(502).json({ error: 'Too many redirects' });
+    return;
+  }
+
   const mod = url.startsWith('https') ? require('https') : require('http');
   const parsedUrl = new URL(url);
 
@@ -237,16 +244,29 @@ function proxyAudioUrl(
   }
 
   const proxyReq = mod.request(options, (upstream: any) => {
-    console.log(`[Stream] Upstream status: ${upstream.statusCode}, content-type: ${upstream.headers['content-type']}, content-length: ${upstream.headers['content-length']}`);
+    const statusCode = upstream.statusCode || 200;
+    const contentType = upstream.headers['content-type'] || '';
+    
+    console.log(`[Stream] Upstream status: ${statusCode}, type: ${contentType}, length: ${upstream.headers['content-length']}`);
 
-    if (upstream.statusCode === 403 && onRetry) {
-      upstream.resume(); // drain the response
+    // Handle Redirects (301, 302, 307, 308)
+    if ([301, 302, 307, 308].includes(statusCode) && upstream.headers.location) {
+      console.log(`[Stream] Following redirect to: ${upstream.headers.location}`);
+      upstream.resume(); // drain
+      proxyAudioUrl(upstream.headers.location, req, res, onRetry, redirectCount + 1);
+      return;
+    }
+
+    // Handle Expired/Blocked URLs (403 or 302/200 returning HTML instead of audio)
+    if ((statusCode === 403 || contentType.includes('text/html')) && onRetry) {
+      console.log(`[Stream] Detected block/expiration (\${statusCode} / \${contentType}). Retrying fresh URL...`);
+      upstream.resume(); // drain
       onRetry();
       return;
     }
 
     // Forward status and headers
-    res.status(upstream.statusCode || 200);
+    res.status(statusCode);
 
     const forward = ['content-type', 'content-length', 'content-range', 'accept-ranges'];
     for (const h of forward) {
@@ -350,13 +370,35 @@ router.get('/trending', async (req: Request, res: Response): Promise<void> => {
 });
 
 /**
- * Home feed — recently added + popular
+ * Home feed — recently added + popular + knotted
  */
 router.get('/feed', async (req: Request, res: Response): Promise<void> => {
   try {
     const recentlyAdded = await Song.find().sort({ createdAt: -1 }).limit(10);
     const popular = await Song.find().sort({ play_count: -1 }).limit(10);
-    res.json({ recentlyAdded, popular });
+    const knottedSongs = await Song.find({ 'nodes.0': { $exists: true } }).sort({ updatedAt: -1 }).limit(10);
+    res.json({ recentlyAdded, popular, knottedSongs });
+  } catch (error) {
+    console.error('[Feed] Error:', error);
+    res.status(500).json({ error: (error as Error).message });
+  }
+});
+
+/**
+ * Search specifically within knotted songs
+ */
+router.get('/knotted', async (req: Request, res: Response): Promise<void> => {
+  try {
+    const q = req.query.q as string;
+    const filter: any = { 'nodes.0': { $exists: true } };
+    if (q && q.trim().length > 0) {
+      filter.$or = [
+        { title: { $regex: q.trim(), $options: 'i' } },
+        { artist: { $regex: q.trim(), $options: 'i' } },
+      ];
+    }
+    const songs = await Song.find(filter).sort({ updatedAt: -1 }).limit(50);
+    res.json(songs);
   } catch (error) {
     res.status(500).json({ error: (error as Error).message });
   }
