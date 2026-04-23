@@ -5,7 +5,7 @@ import mongoose from 'mongoose';
 import { GridFSBucket, ObjectId } from 'mongodb';
 import { searchYouTube, getVideoDetails } from '../services/youtube.service';
 import redisClient from '../config/redis';
-import { exec } from 'child_process';
+import { exec, spawn } from 'child_process';
 import fs from 'fs';
 import path from 'path';
 
@@ -43,7 +43,7 @@ function getStreamUrl(videoId: string): Promise<string> {
     const command = [
       'yt-dlp',
       cookieFlag,
-      '-f "ba/bestaudio/b"',
+      '-f "bestaudio[ext=webm]/bestaudio[ext=m4a]/bestaudio/b[protocol!*=m3u8]"',
       '-g',                    // --get-url: just print the URL, don't download
       '--no-check-certificates',
       '--no-warnings',
@@ -153,10 +153,131 @@ router.get('/:id/stream-url', async (req: Request, res: Response): Promise<void>
 
     res.json({ streamUrl, cached: false });
   } catch (error) {
-    console.error('[Stream] Error:', error);
+    console.error('[Stream URL] Error:', error);
     res.status(500).json({ error: (error as Error).message });
   }
 });
+
+/**
+ * HTTP audio proxy — fetches the direct YouTube URL via yt-dlp, then proxies
+ * the actual HTTP audio through the backend using Node's native http modules.
+ * This ensures:
+ * 1. No IP-locking (request comes from server IP)
+ * 2. Proper Content-Length / Accept-Ranges headers for TrackPlayer/ExoPlayer
+ * 3. Seek support via Range header forwarding
+ */
+router.get('/:id/stream', async (req: Request, res: Response): Promise<void> => {
+  const id = req.params.id as string;
+  console.log(`[Stream] Proxying audio for video: ${id}`);
+
+  try {
+    // Step 1: Get the direct audio URL (from cache or yt-dlp)
+    const cacheKey = `stream:${id}`;
+    let audioUrl: string | null = null;
+
+    try {
+      audioUrl = await redisClient.get(cacheKey);
+      if (audioUrl) console.log(`[Stream] Cache hit for ${id}`);
+    } catch (e) {
+      // Redis down, continue
+    }
+
+    if (!audioUrl) {
+      audioUrl = await getStreamUrl(id);
+      console.log(`[Stream] Got fresh URL for ${id}, length=${audioUrl.length}`);
+      try {
+        await redisClient.setex(cacheKey, 4 * 60 * 60, audioUrl);
+      } catch (e) { /* ignore */ }
+    }
+
+    // Step 2: Proxy the HTTP request using Node's native modules
+    proxyAudioUrl(audioUrl, req, res, async () => {
+      // On failure (expired URL), clear cache and retry once
+      console.log(`[Stream] URL expired for ${id}, retrying...`);
+      try { await redisClient.del(cacheKey); } catch (e) { /* ignore */ }
+      const freshUrl = await getStreamUrl(id);
+      try { await redisClient.setex(cacheKey, 4 * 60 * 60, freshUrl); } catch (e) { /* ignore */ }
+      proxyAudioUrl(freshUrl, req, res);
+    });
+  } catch (error) {
+    console.error('[Stream] Error:', error);
+    if (!res.headersSent) {
+      res.status(500).json({ error: (error as Error).message });
+    }
+  }
+});
+
+/**
+ * Proxy an audio URL to the Express response using Node's native http/https modules.
+ * Forwards Range headers for seeking. Calls onRetry() if the upstream returns 403.
+ */
+function proxyAudioUrl(
+  url: string,
+  req: Request,
+  res: Response,
+  onRetry?: () => void
+) {
+  const mod = url.startsWith('https') ? require('https') : require('http');
+  const parsedUrl = new URL(url);
+
+  const options: any = {
+    hostname: parsedUrl.hostname,
+    port: parsedUrl.port,
+    path: parsedUrl.pathname + parsedUrl.search,
+    method: 'GET',
+    headers: {
+      'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+    },
+  };
+
+  // Forward Range header for seeking
+  if (req.headers.range) {
+    options.headers['Range'] = req.headers.range;
+    console.log(`[Stream] Forwarding Range: ${req.headers.range}`);
+  }
+
+  const proxyReq = mod.request(options, (upstream: any) => {
+    console.log(`[Stream] Upstream status: ${upstream.statusCode}, content-type: ${upstream.headers['content-type']}, content-length: ${upstream.headers['content-length']}`);
+
+    if (upstream.statusCode === 403 && onRetry) {
+      upstream.resume(); // drain the response
+      onRetry();
+      return;
+    }
+
+    // Forward status and headers
+    res.status(upstream.statusCode || 200);
+
+    const forward = ['content-type', 'content-length', 'content-range', 'accept-ranges'];
+    for (const h of forward) {
+      if (upstream.headers[h]) {
+        res.setHeader(h, upstream.headers[h]);
+      }
+    }
+
+    // Pipe the upstream Node.js stream directly to Express response
+    upstream.pipe(res);
+
+    upstream.on('error', (err: Error) => {
+      console.error('[Stream] Upstream read error:', err.message);
+      if (!res.destroyed) res.end();
+    });
+  });
+
+  proxyReq.on('error', (err: Error) => {
+    console.error('[Stream] Proxy request error:', err.message);
+    if (!res.headersSent) {
+      res.status(502).json({ error: 'Failed to connect to audio source' });
+    }
+  });
+
+  req.on('close', () => {
+    proxyReq.destroy();
+  });
+
+  proxyReq.end();
+}
+
 
 /**
  * Get video details / ensure song in DB
