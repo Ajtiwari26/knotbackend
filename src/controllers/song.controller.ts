@@ -50,19 +50,49 @@ export const enqueueDownload = async (req: Request, res: Response): Promise<void
   }
 };
 
-export const createSong = async (req: Request, res: Response): Promise<void> => {
+export const syncLocalKnot = async (req: Request, res: Response): Promise<void> => {
   try {
-    const { youtube_id, title, thumbnail, nodes } = req.body;
+    const { local_id, title, artist, duration_ms, nodes } = req.body;
     
-    const newSong = new Song({
-      youtube_id,
-      title,
-      thumbnail,
-      nodes
-    });
+    if (!local_id) {
+       res.status(400).json({ error: 'local_id is required' });
+       return;
+    }
+
+    let song = await Song.findOne({ local_id });
     
-    await newSong.save();
-    res.status(201).json(newSong);
+    if (song) {
+      song.nodes = nodes;
+      await song.save();
+    } else {
+      song = new Song({
+        local_id,
+        title,
+        artist,
+        duration_ms,
+        nodes,
+        source: 'local'
+      });
+      await song.save();
+    }
+    
+    res.status(200).json(song);
+  } catch (error) {
+    res.status(500).json({ error: (error as Error).message });
+  }
+};
+
+export const getLocalKnot = async (req: Request, res: Response): Promise<void> => {
+  try {
+    const { local_id } = req.params;
+    const song = await Song.findOne({ local_id });
+    
+    if (!song) {
+       res.status(404).json({ error: 'Local knot not found' });
+       return;
+    }
+    
+    res.status(200).json(song);
   } catch (error) {
     res.status(500).json({ error: (error as Error).message });
   }

@@ -29,7 +29,8 @@ const NodeSchema: Schema = new Schema({
 
 const SongSchema: Schema = new Schema(
   {
-    youtube_id: { type: String, required: true, unique: true },
+    youtube_id: { type: String, required: false, sparse: true, unique: true },
+    local_id: { type: String, required: false, sparse: true, unique: true },
     title: { type: String, required: true },
     artist: { type: String },
     album: { type: String },
@@ -39,6 +40,7 @@ const SongSchema: Schema = new Schema(
     tags: { type: [String], default: [] },
     thumbnail: { type: String, required: false },
     nodes: { type: [NodeSchema], default: [] },
+    source: { type: String, enum: ['youtube', 'local'], default: 'youtube' },
   },
   {
     timestamps: true,

@@ -1,5 +1,5 @@
 import { Router, Request, Response } from 'express';
-import { getSongMetadata, enqueueDownload, createSong } from '../controllers/song.controller';
+import { getSongMetadata, enqueueDownload, syncLocalKnot, getLocalKnot } from '../controllers/song.controller';
 import Song from '../models/Song';
 import mongoose from 'mongoose';
 import { GridFSBucket, ObjectId } from 'mongodb';
@@ -53,7 +53,7 @@ function getStreamUrl(videoId: string): Promise<string> {
     ].filter(Boolean).join(' ');
 
     console.log(`[yt-dlp] Executing: ${command}`);
-    exec(command, { timeout: 15000 }, (error, stdout, stderr) => {
+    exec(command, { timeout: 45000 }, (error, stdout, stderr) => {
       if (error) {
         console.error(`[yt-dlp] Error for ${videoId}:`, error.message);
         console.error(`[yt-dlp] stderr: ${stderr}`);
@@ -259,7 +259,7 @@ function proxyAudioUrl(
 
     // Handle Expired/Blocked URLs (403 or 302/200 returning HTML instead of audio)
     if ((statusCode === 403 || contentType.includes('text/html')) && onRetry) {
-      console.log(`[Stream] Detected block/expiration (\${statusCode} / \${contentType}). Retrying fresh URL...`);
+      console.log(`[Stream] Detected block/expiration (${statusCode} / ${contentType}). Retrying fresh URL...`);
       upstream.resume(); // drain
       onRetry();
       return;
@@ -424,7 +424,18 @@ router.post('/:id/play', async (req: Request, res: Response): Promise<void> => {
   }
 });
 
-router.post('/', createSong);
+router.get('/local/all-knotted', async (_req: Request, res: Response): Promise<void> => {
+  try {
+    const songs = await Song.find({ source: 'local', 'nodes.0': { $exists: true } });
+    res.json(songs);
+  } catch (error) {
+    res.status(500).json({ error: (error as Error).message });
+  }
+});
+
+router.post('/local/sync', syncLocalKnot);
+router.get('/local/:local_id', getLocalKnot);
+router.post('/', (req, res) => res.status(405).json({ error: 'Use /api/songs/local/sync for local songs' }));
 router.get('/:id', getSongMetadata);
 router.post('/:id/download', enqueueDownload);
 
