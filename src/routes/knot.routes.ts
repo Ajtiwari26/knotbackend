@@ -135,8 +135,8 @@ router.delete('/:id', protect, async (req: AuthRequest, res: Response): Promise<
 // AUTO-KNOTTING ENGINE — Three-Tier Proxy Routes
 // ══════════════════════════════════════════════════════════════
 
-// On Render, the service is named 'knot-engine' in render.yaml
-const AUTO_KNOT_ENGINE_URL = process.env.AUTO_KNOT_ENGINE_URL || 'https://knot-engine.onrender.com';
+// On Render, the service is named 'autoknotengine' per user confirmation
+const AUTO_KNOT_ENGINE_URL = process.env.AUTO_KNOT_ENGINE_URL || 'https://autoknotengine.onrender.com';
 const MODAL_PRO_URL = process.env.MODAL_PRO_URL || 'https://YOUR_APP--knot-pro-analyze-web.modal.run';
 
 /**
