@@ -167,10 +167,17 @@ router.post('/auto-knot', upload.single('file'), async (req: Request, res: Respo
     if (req.body.song_uri) formData.append('device_uri', req.body.song_uri);
 
     const startTime = Date.now();
+    // Increase timeout to 10 minutes for Render DSP engine
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 600000);
+
     const response = await fetch(`${AUTO_KNOT_ENGINE_URL}/analyze`, {
       method: 'POST',
       body: formData,
+      signal: controller.signal,
     });
+    
+    clearTimeout(timeoutId);
 
     const elapsed = Date.now() - startTime;
     console.log(`[AutoKnot] Engine response received in ${elapsed}ms: ${response.status}`);
@@ -224,10 +231,17 @@ router.post('/auto-knot-pro', upload.single('file'), async (req: Request, res: R
     formData.append('filename', song_title);
     formData.append('sensitivity', sensitivity);
 
+    // Increase timeout to 10 minutes for Modal GPU engine
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 600000);
+
     const response = await fetch(MODAL_PRO_URL, {
       method: 'POST',
       body: formData,
+      signal: controller.signal,
     });
+    
+    clearTimeout(timeoutId);
 
     // Clean up temporary file
     await fs.promises.unlink(req.file.path).catch(console.error);
