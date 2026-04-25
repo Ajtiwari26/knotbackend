@@ -1,6 +1,10 @@
 import { Router, Request, Response } from 'express';
+import multer from 'multer';
+import fs from 'fs';
 import KnotVersion from '../models/KnotVersion';
 import { protect, AuthRequest } from '../middleware/auth';
+
+const upload = multer({ dest: 'uploads/' });
 
 const router = Router();
 
@@ -123,6 +127,129 @@ router.delete('/:id', protect, async (req: AuthRequest, res: Response): Promise<
     await KnotVersion.deleteOne({ _id: knot._id });
     res.json({ message: 'Knot removed' });
   } catch (error) {
+    res.status(500).json({ error: (error as Error).message });
+  }
+});
+
+// ══════════════════════════════════════════════════════════════
+// AUTO-KNOTTING ENGINE — Three-Tier Proxy Routes
+// ══════════════════════════════════════════════════════════════
+
+// On Render, the service is named 'knot-engine' in render.yaml
+const AUTO_KNOT_ENGINE_URL = process.env.AUTO_KNOT_ENGINE_URL || 'https://knot-engine.onrender.com';
+const MODAL_PRO_URL = process.env.MODAL_PRO_URL || 'https://YOUR_APP--knot-pro-analyze-web.modal.run';
+
+/**
+ * Auto-Knot (Fast) — Proxies to Python DSP engine on Render
+ */
+router.post('/auto-knot', upload.single('file'), async (req: Request, res: Response): Promise<void> => {
+  try {
+    const { song_title, duration_ms, sensitivity = 'balanced' } = req.body;
+
+    if (!req.file) {
+      res.status(400).json({ error: 'Audio file is required' });
+      return;
+    }
+
+    console.log(`[AutoKnot] Fast analysis requested for: ${song_title}`);
+    console.log(`[AutoKnot] Proxying to: ${AUTO_KNOT_ENGINE_URL}/analyze`);
+
+    // Read the uploaded file into a Blob
+    const fileBuffer = await fs.promises.readFile(req.file.path);
+    const fileBlob = new Blob([fileBuffer], { type: req.file.mimetype || 'audio/mpeg' });
+
+    // Create FormData for the Render API
+    const formData = new FormData();
+    formData.append('file', fileBlob, req.file.originalname || 'audio.m4a');
+    formData.append('sensitivity', sensitivity);
+    
+    // Pass the original device URI if needed
+    if (req.body.song_uri) formData.append('device_uri', req.body.song_uri);
+
+    const startTime = Date.now();
+    const response = await fetch(`${AUTO_KNOT_ENGINE_URL}/analyze`, {
+      method: 'POST',
+      body: formData,
+    });
+
+    const elapsed = Date.now() - startTime;
+    console.log(`[AutoKnot] Engine response received in ${elapsed}ms: ${response.status}`);
+
+    // Clean up temporary file
+    await fs.promises.unlink(req.file.path).catch(console.error);
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      console.error(`[AutoKnot] Engine error: ${errorText}`);
+      res.status(response.status).json({ error: `Engine error: ${errorText}` });
+      return;
+    }
+
+    const result = await response.json();
+    console.log(`[AutoKnot] Fast analysis complete: ${result.knot_count} knots`);
+    res.json(result);
+  } catch (error) {
+    console.error('[AutoKnot] Fast analysis failed:', error);
+    
+    // Ensure cleanup on error
+    if (req.file) {
+      await fs.promises.unlink(req.file.path).catch(() => {});
+    }
+    
+    res.status(500).json({ error: (error as Error).message });
+  }
+});
+
+/**
+ * Auto-Knot Pro — Proxies to Modal.com GPU serverless function
+ */
+router.post('/auto-knot-pro', upload.single('file'), async (req: Request, res: Response): Promise<void> => {
+  try {
+    const { song_title, duration_ms, sensitivity = 'balanced' } = req.body;
+
+    if (!req.file) {
+      res.status(400).json({ error: 'Audio file is required' });
+      return;
+    }
+
+    console.log(`[AutoKnot] Pro analysis requested for: ${song_title}`);
+
+    // Modal can either accept multipart/form-data or Base64 in JSON depending on the endpoint.
+    // For simplicity, we'll forward it as FormData just like the Fast tier
+    const fileBuffer = await fs.promises.readFile(req.file.path);
+    const fileBlob = new Blob([fileBuffer], { type: req.file.mimetype || 'audio/mpeg' });
+
+    const formData = new FormData();
+    formData.append('file', fileBlob, req.file.originalname || 'audio.m4a');
+    formData.append('filename', song_title);
+    formData.append('sensitivity', sensitivity);
+
+    const response = await fetch(MODAL_PRO_URL, {
+      method: 'POST',
+      body: formData,
+    });
+
+    // Clean up temporary file
+    await fs.promises.unlink(req.file.path).catch(console.error);
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      console.error(`[AutoKnot] Pro engine error: ${errorText}`);
+      res.status(response.status).json({ error: `Pro engine error: ${errorText}` });
+      return;
+    }
+
+    const result = await response.json();
+    console.log(`[AutoKnot] Pro analysis complete: ${result.knot_count} knots`);
+    res.json(result);
+  } catch (error) {
+    console.error('[AutoKnot] Pro analysis failed:', error);
+    
+    // Ensure cleanup on error
+    if (req.file) {
+      await fs.promises.unlink(req.file.path).catch(() => {});
+    }
+    
     res.status(500).json({ error: (error as Error).message });
   }
 });
