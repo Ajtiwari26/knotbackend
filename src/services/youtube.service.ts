@@ -1,7 +1,17 @@
 import { google } from 'googleapis';
 import dotenv from 'dotenv';
+import { exec } from 'child_process';
+import path from 'path';
+import fs from 'fs';
 
 dotenv.config();
+
+// In-memory cache for stream URLs to bypass Upstash limits
+const STREAM_URL_CACHE = new Map<string, { url: string; expiry: number }>();
+const CACHE_TTL = 1000 * 60 * 60 * 2; // 2 hours
+
+const COOKIE_PATH = path.join(process.cwd(), 'youtube_cookies.txt');
+const hasCookies = fs.existsSync(COOKIE_PATH);
 
 const youtube = google.youtube({
   version: 'v3',
@@ -122,6 +132,47 @@ function parseDuration(iso: string): number {
 /**
  * Decode HTML entities from YouTube API responses.
  */
+export function getStreamUrl(videoId: string): Promise<string> {
+  const cached = STREAM_URL_CACHE.get(videoId);
+  if (cached && cached.expiry > Date.now()) {
+    console.log(`[Cache] Found URL for ${videoId}`);
+    return Promise.resolve(cached.url);
+  }
+
+  return new Promise((resolve, reject) => {
+    const ytUrl = `https://www.youtube.com/watch?v=${videoId}`;
+    const cookieFlag = hasCookies ? `--cookies ${COOKIE_PATH}` : '';
+
+    const command = [
+      'yt-dlp',
+      cookieFlag,
+      '-f "bestaudio[ext=webm]/bestaudio[ext=m4a]/bestaudio/b[protocol!*=m3u8]"',
+      '-g',                    // --get-url: just print the URL, don't download
+      '--no-check-certificates',
+      '--no-warnings',
+      '--force-ipv4',
+      '--user-agent "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"',
+      `"${ytUrl}"`,
+    ].filter(Boolean).join(' ');
+
+    console.log(`[yt-dlp] Executing: ${command}`);
+    exec(command, { timeout: 45000 }, (error, stdout, stderr) => {
+      if (error) {
+        console.error(`[yt-dlp] Error for ${videoId}:`, error.message);
+        return reject(new Error(stderr || error.message));
+      }
+      const url = stdout.trim().split('\n')[0];
+      if (!url || !url.startsWith('http')) {
+        return reject(new Error('yt-dlp returned invalid URL'));
+      }
+      
+      // Save to cache
+      STREAM_URL_CACHE.set(videoId, { url, expiry: Date.now() + CACHE_TTL });
+      resolve(url);
+    });
+  });
+}
+
 function decodeHtml(html: string): string {
   return html
     .replace(/&amp;/g, '&')
