@@ -3,6 +3,8 @@ import multer from 'multer';
 import fs from 'fs';
 import KnotVersion from '../models/KnotVersion';
 import { protect, AuthRequest } from '../middleware/auth';
+import { DistributedGateway } from '../services/distributed-gateway.service';
+import { GroqService } from '../services/groq.service';
 
 const upload = multer({ dest: 'uploads/' });
 
@@ -26,6 +28,69 @@ router.post('/', protect, async (req: AuthRequest, res: Response): Promise<void>
     res.status(201).json(knot);
   } catch (error) {
     res.status(500).json({ error: (error as Error).message });
+  }
+});
+
+/**
+ * TIER 2: FAST (Distributed) — Audio Analysis Gateway
+ * Streams knots as they are processed by the engine cluster.
+ */
+router.get('/auto-knot-stream', async (req: Request, res: Response) => {
+  const { youtube_id, sensitivity = 'balanced', stream_url } = req.query;
+
+  if (!youtube_id) {
+    return res.status(400).json({ error: 'youtube_id is required' });
+  }
+
+  res.setHeader('Content-Type', 'text/event-stream');
+  res.setHeader('Cache-Control', 'no-cache');
+  res.setHeader('Connection', 'keep-alive');
+
+  console.log(`[SSE] Starting Distributed Analysis for ${youtube_id}`);
+
+  try {
+    // ── STEP 1: Smart Check (Try Transcript/Groq First) ──
+    try {
+      console.log(`[SSE] Checking for transcript for ${youtube_id}...`);
+      const groqResult = await GroqService.analyzeWithTranscript(youtube_id as string);
+      
+      // If we found a transcript, send it immediately as an SSE sequence
+      res.write(`data: ${JSON.stringify({ 
+        type: 'meta', 
+        duration: groqResult.sections[groqResult.sections.length-1]?.start_ms / 1000 || 0, 
+        numNodes: 1 
+      })}\n\n`);
+      
+      res.write(`data: ${JSON.stringify({ 
+        type: 'done', 
+        junctions: groqResult.junctions, 
+        sections: groqResult.sections, 
+        lyrics: groqResult.lyrics,
+        summary: groqResult.summary,
+        method: 'groq_instant' 
+      })}\n\n`);
+      
+      res.end();
+      return;
+    } catch (e) {
+      console.log(`[SSE] No transcript found or Groq failed. Falling back to DSP engine.`);
+    }
+
+    // ── STEP 2: Fallback to Distributed DSP ──
+    const generator = DistributedGateway.streamAnalyze(
+      youtube_id as string, 
+      sensitivity as string, 
+      stream_url as string
+    );
+    for await (const update of generator) {
+      res.write(`data: ${JSON.stringify(update)}\n\n`);
+    }
+    res.write('data: {"type": "done"}\n\n');
+    res.end();
+  } catch (error) {
+    console.error('[SSE] Error:', error);
+    res.write(`data: ${JSON.stringify({ type: 'error', message: (error as Error).message })}\n\n`);
+    res.end();
   }
 });
 
@@ -139,12 +204,24 @@ router.delete('/:id', protect, async (req: AuthRequest, res: Response): Promise<
 const AUTO_KNOT_ENGINE_URL = process.env.AUTO_KNOT_ENGINE_URL || 'https://autoknotengine.onrender.com';
 const MODAL_PRO_URL = process.env.MODAL_PRO_URL || 'https://YOUR_APP--knot-pro-analyze-web.modal.run';
 
+
 /**
  * Auto-Knot (Fast) — Proxies to Python DSP engine on Render
  */
 router.post('/auto-knot', upload.single('file'), async (req: Request, res: Response): Promise<void> => {
   try {
-    const { song_title, duration_ms, sensitivity = 'balanced' } = req.body;
+    const { song_title, duration_ms, sensitivity = 'balanced', youtube_id, stream_url } = req.body;
+
+    if (youtube_id) {
+      console.log(`[AutoKnot] Using Distributed Gateway for YouTube ID: ${youtube_id}`);
+      const result = await DistributedGateway.analyzeYoutube(youtube_id, sensitivity, stream_url);
+      res.json({
+        ...result,
+        knot_count: result.junctions.length,
+        method: 'distributed'
+      });
+      return;
+    }
 
     if (!req.file) {
       res.status(400).json({ error: 'Audio file is required' });
@@ -212,7 +289,20 @@ router.post('/auto-knot', upload.single('file'), async (req: Request, res: Respo
  */
 router.post('/auto-knot-pro', upload.single('file'), async (req: Request, res: Response): Promise<void> => {
   try {
-    const { song_title, duration_ms, sensitivity = 'balanced' } = req.body;
+    const { song_title, duration_ms, sensitivity = 'balanced', youtube_id, stream_url } = req.body;
+
+    if (youtube_id) {
+      console.log(`[AutoKnot] Pro: Using Distributed Gateway for YouTube ID: ${youtube_id}`);
+      // In a real Pro tier, we might use Modal or more nodes. 
+      // For now, we reuse the distributed gateway but could increase nodes if available.
+      const result = await DistributedGateway.analyzeYoutube(youtube_id, sensitivity, stream_url);
+      res.json({
+        ...result,
+        knot_count: result.junctions.length,
+        method: 'distributed_pro'
+      });
+      return;
+    }
 
     if (!req.file) {
       res.status(400).json({ error: 'Audio file is required' });
@@ -264,6 +354,23 @@ router.post('/auto-knot-pro', upload.single('file'), async (req: Request, res: R
       await fs.promises.unlink(req.file.path).catch(() => {});
     }
     
+    res.status(500).json({ error: (error as Error).message });
+  }
+});
+
+/**
+ * TIER 1.5: GROQ — Instant Transcript-Based Analysis
+ */
+router.post('/auto-knot-groq', async (req: Request, res: Response): Promise<void> => {
+  try {
+    const { youtube_id } = req.body;
+    if (!youtube_id) {
+      res.status(400).json({ error: 'youtube_id is required' });
+      return;
+    }
+    const result = await GroqService.analyzeWithTranscript(youtube_id);
+    res.json({ ...result, method: 'groq_llama_70b' });
+  } catch (error) {
     res.status(500).json({ error: (error as Error).message });
   }
 });
