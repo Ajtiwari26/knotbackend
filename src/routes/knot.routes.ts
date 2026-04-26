@@ -375,4 +375,21 @@ router.post('/auto-knot-groq', async (req: Request, res: Response): Promise<void
   }
 });
 
+/**
+ * TIER 1.5: GROQ — Courier Mode (Client provides transcript)
+ */
+router.post('/auto-knot-groq-client', async (req: Request, res: Response): Promise<void> => {
+  try {
+    const { youtube_id, transcript } = req.body;
+    if (!youtube_id || !transcript) {
+      res.status(400).json({ error: 'youtube_id and transcript are required' });
+      return;
+    }
+    const result = await GroqService.analyzeClientTranscript(transcript, youtube_id);
+    res.json({ ...result, method: 'groq_courier' });
+  } catch (error) {
+    res.status(500).json({ error: (error as Error).message });
+  }
+});
+
 export default router;

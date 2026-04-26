@@ -118,5 +118,50 @@ export class GroqService {
       console.error(`[Groq] Request failed:`, error);
       throw error;
     }
+  /**
+   * Client-Provided Transcript Analysis (The "Courier" Method)
+   */
+  static async analyzeClientTranscript(transcriptText: string, youtubeId: string): Promise<GroqKnotResult> {
+    console.log(`[Groq] Analyzing client-provided transcript for ${youtubeId}...`);
+    
+    const activeKey = this.getNextKey();
+    const systemPrompt = `
+      You are the "Knot" AI Music Editor. Your job is to analyze a timestamped transcript and identify "Lyrical Stanzas" to KEEP and "Boring/Non-Lyrical Parts" to KNOT (skip).
+
+      STRATEGY:
+      1. Identify ONLY the stanzas with lyrics.
+      2. Intro (0ms to first lyric) is ALWAYS a KNOT.
+      3. Outro (last lyric to end) is ALWAYS a KNOT.
+      4. Instrumental breaks > 5s are KNOTS.
+
+      OUTPUT ONLY VALID JSON:
+      {
+        "junctions": [{"start_ms": number, "end_ms": number, "reason": "string"}],
+        "sections": [{"start_ms": number, "title": "string", "lyrics": "string"}],
+        "summary": "string",
+        "vibe_check": "string"
+      }
+    `;
+
+    const response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${activeKey}`,
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({
+        model: 'llama-3.3-70b-versatile',
+        messages: [
+          { role: 'system', content: systemPrompt },
+          { role: 'user', content: `YouTube ID: ${youtubeId}\nTranscript:\n${transcriptText.slice(0, 32000)}` }
+        ],
+        response_format: { type: 'json_object' },
+        temperature: 0.1
+      })
+    });
+
+    if (!response.ok) throw new Error(`Groq Error: ${await response.text()}`);
+    const data = await response.json();
+    return JSON.parse(data.choices[0].message.content);
   }
 }
