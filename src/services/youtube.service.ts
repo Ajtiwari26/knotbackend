@@ -139,7 +139,7 @@ export function getStreamUrl(videoId: string): Promise<string> {
     return Promise.resolve(cached.url);
   }
 
-  return new Promise((resolve, reject) => {
+  return new Promise(async (resolve, reject) => {
     const ytUrl = `https://www.youtube.com/watch?v=${videoId}`;
     const cookieFlag = hasCookies ? `--cookies ${COOKIE_PATH}` : '';
 
@@ -147,7 +147,7 @@ export function getStreamUrl(videoId: string): Promise<string> {
       'yt-dlp',
       cookieFlag,
       '-f "bestaudio[ext=webm]/bestaudio[ext=m4a]/bestaudio/b[protocol!*=m3u8]"',
-      '-g',                    // --get-url: just print the URL, don't download
+      '-g',
       '--no-check-certificates',
       '--no-warnings',
       '--force-ipv4',
@@ -155,20 +155,49 @@ export function getStreamUrl(videoId: string): Promise<string> {
       `"${ytUrl}"`,
     ].filter(Boolean).join(' ');
 
-    console.log(`[yt-dlp] Executing: ${command}`);
-    exec(command, { timeout: 45000 }, (error, stdout, stderr) => {
-      if (error) {
-        console.error(`[yt-dlp] Error for ${videoId}:`, error.message);
-        return reject(new Error(stderr || error.message));
+    console.log(`[yt-dlp] Executing for ${videoId}...`);
+    
+    exec(command, { timeout: 30000 }, async (error, stdout, stderr) => {
+      if (!error) {
+        const url = stdout.trim().split('\n')[0];
+        if (url && url.startsWith('http')) {
+          STREAM_URL_CACHE.set(videoId, { url, expiry: Date.now() + CACHE_TTL });
+          return resolve(url);
+        }
       }
-      const url = stdout.trim().split('\n')[0];
-      if (!url || !url.startsWith('http')) {
-        return reject(new Error('yt-dlp returned invalid URL'));
+
+      console.warn(`[yt-dlp] Failed for ${videoId}. Error: ${error?.message || 'Invalid output'}. Trying Invidious fallback...`);
+
+      // Fallback: Try multiple Invidious instances
+      const instances = [
+        'https://inv.nadeko.net',
+        'https://invidious.flokinet.to',
+        'https://yewtu.be',
+        'https://iv.ggtyler.dev'
+      ];
+
+      for (const instance of instances) {
+        try {
+          console.log(`[Invidious] Trying ${instance} for ${videoId}...`);
+          const res = await fetch(`${instance}/api/v1/videos/${videoId}`);
+          if (!res.ok) continue;
+          
+          const data = await res.json();
+          const audioFormat = data.adaptiveFormats?.find((f: any) => 
+            f.type?.includes('audio') && !f.type?.includes('video')
+          );
+
+          if (audioFormat && audioFormat.url) {
+            console.log(`[Invidious] Success! Got URL from ${instance}`);
+            STREAM_URL_CACHE.set(videoId, { url: audioFormat.url, expiry: Date.now() + CACHE_TTL });
+            return resolve(audioFormat.url);
+          }
+        } catch (e) {
+          console.warn(`[Invidious] Instance ${instance} failed.`);
+        }
       }
-      
-      // Save to cache
-      STREAM_URL_CACHE.set(videoId, { url, expiry: Date.now() + CACHE_TTL });
-      resolve(url);
+
+      reject(new Error(stderr || error?.message || 'All extraction methods failed'));
     });
   });
 }
