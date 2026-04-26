@@ -23,13 +23,6 @@ app.use(express.json());
 // Database Connection
 connectDB();
 
-// Graceful Redis import — don't crash if Redis is down
-try {
-  require('./workers/download.worker');
-} catch (e) {
-  console.warn('[Worker] Download worker failed to initialize:', (e as Error).message);
-}
-
 // Routes
 app.use('/api/auth', authRoutes);
 app.use('/api/users', userRoutes);

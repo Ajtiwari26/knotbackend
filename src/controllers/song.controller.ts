@@ -1,20 +1,30 @@
 import { Request, Response } from 'express';
 import Song from '../models/Song';
-import { Queue } from 'bullmq';
-import IORedis from 'ioredis';
+import { processDownload } from '../workers/download.worker';
 import dotenv from 'dotenv';
 
 dotenv.config();
 
-const connection = process.env.REDIS_URL 
-  ? new IORedis(process.env.REDIS_URL, { maxRetriesPerRequest: null })
-  : new IORedis({
-      host: process.env.REDIS_HOST || '127.0.0.1',
-      port: parseInt(process.env.REDIS_PORT || '6379'),
-      maxRetriesPerRequest: null
+/**
+ * REPLACED BULLMQ: Enqueues download in background using native async/await
+ */
+export const enqueueDownload = async (req: Request, res: Response): Promise<void> => {
+  try {
+    const { id } = req.params; // youtube_id
+    
+    // Start processing in background (don't await so we can return 202)
+    processDownload(id).catch(err => {
+      console.error(`[Controller] Background download failed for ${id}:`, err);
     });
-
-export const downloadQueue = new Queue('download-queue', { connection });
+    
+    res.status(202).json({
+      message: 'Download started in background',
+      youtube_id: id
+    });
+  } catch (error) {
+    res.status(500).json({ error: (error as Error).message });
+  }
+};
 
 export const getSongMetadata = async (req: Request, res: Response): Promise<void> => {
   try {
@@ -27,24 +37,6 @@ export const getSongMetadata = async (req: Request, res: Response): Promise<void
     }
     
     res.status(200).json(song);
-  } catch (error) {
-    res.status(500).json({ error: (error as Error).message });
-  }
-};
-
-export const enqueueDownload = async (req: Request, res: Response): Promise<void> => {
-  try {
-    const { id } = req.params; // youtube_id
-    
-    // Add job to BullMQ
-    const job = await downloadQueue.add('download-song', {
-      youtube_id: id
-    });
-    
-    res.status(202).json({
-      message: 'Download enqueued',
-      jobId: job.id
-    });
   } catch (error) {
     res.status(500).json({ error: (error as Error).message });
   }
