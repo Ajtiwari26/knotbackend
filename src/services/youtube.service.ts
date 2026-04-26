@@ -143,14 +143,16 @@ export async function getStreamUrl(videoId: string): Promise<string> {
   try {
     console.log(`[Innertube] Attempting extraction for ${videoId}...`);
     const { Innertube } = require('youtubei.js');
-    const youtube = await Innertube.create();
+    // Using YTMUSIC client is much more robust for official music tracks
+    const youtube = await Innertube.create({ client: 'YTMUSIC' });
     const info = await youtube.getBasicInfo(videoId);
     const format = info.chooseFormat({ type: 'audio', quality: 'best' });
     
-    if (format?.decipher(youtube.session.player)) {
-      const url = format.url;
+    if (format) {
+      // In YTMUSIC mode, we usually don't need manual deciphering if the library handles it
+      const url = format.url || (await format.decipher?.(youtube.session.player));
       if (url) {
-        console.log(`[Innertube] Success!`);
+        console.log(`[Innertube] Success via YTMUSIC!`);
         STREAM_URL_CACHE.set(videoId, { url, expiry: Date.now() + CACHE_TTL });
         return url;
       }
