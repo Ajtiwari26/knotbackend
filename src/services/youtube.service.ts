@@ -130,74 +130,67 @@ function parseDuration(iso: string): number {
 }
 
 /**
- * Decode HTML entities from YouTube API responses.
+ * Get a working stream URL for a video.
  */
-export function getStreamUrl(videoId: string): Promise<string> {
+export async function getStreamUrl(videoId: string): Promise<string> {
   const cached = STREAM_URL_CACHE.get(videoId);
   if (cached && cached.expiry > Date.now()) {
     console.log(`[Cache] Found URL for ${videoId}`);
-    return Promise.resolve(cached.url);
+    return cached.url;
   }
 
-  return new Promise(async (resolve, reject) => {
+  // Tier 1: YouTubei.js (Innertube) - Mimics Android App
+  try {
+    console.log(`[Innertube] Attempting extraction for ${videoId}...`);
+    const { Innertube } = require('youtubei.js');
+    const youtube = await Innertube.create();
+    const info = await youtube.getBasicInfo(videoId);
+    const format = info.chooseFormat({ type: 'audio', quality: 'best' });
+    
+    if (format?.decipher(youtube.session.player)) {
+      const url = format.url;
+      if (url) {
+        console.log(`[Innertube] Success!`);
+        STREAM_URL_CACHE.set(videoId, { url, expiry: Date.now() + CACHE_TTL });
+        return url;
+      }
+    }
+  } catch (e) {
+    console.warn(`[Innertube] Failed for ${videoId}:`, (e as Error).message);
+  }
+
+  // Tier 2: Piped API Fallback
+  try {
+    console.log(`[Piped] Trying fallback for ${videoId}...`);
+    const res = await fetch(`https://pipedapi.kavin.rocks/streams/${videoId}`);
+    if (res.ok) {
+      const data = await res.json();
+      const audio = data.audioStreams?.find((s: any) => s.format === 'WEBM_OPUS' || s.bitrate > 100000);
+      if (audio?.url) {
+        console.log(`[Piped] Success!`);
+        STREAM_URL_CACHE.set(videoId, { url: audio.url, expiry: Date.now() + CACHE_TTL });
+        return audio.url;
+      }
+    }
+  } catch (e) {
+    console.warn(`[Piped] Failed.`);
+  }
+
+  // Tier 3: Last Resort - yt-dlp
+  return new Promise((resolve, reject) => {
     const ytUrl = `https://www.youtube.com/watch?v=${videoId}`;
     const cookieFlag = hasCookies ? `--cookies ${COOKIE_PATH}` : '';
+    const command = `yt-dlp ${cookieFlag} -f "bestaudio" -g "${ytUrl}"`;
 
-    const command = [
-      'yt-dlp',
-      cookieFlag,
-      '-f "bestaudio[ext=webm]/bestaudio[ext=m4a]/bestaudio/b[protocol!*=m3u8]"',
-      '-g',
-      '--no-check-certificates',
-      '--no-warnings',
-      '--force-ipv4',
-      '--user-agent "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"',
-      `"${ytUrl}"`,
-    ].filter(Boolean).join(' ');
-
-    console.log(`[yt-dlp] Executing for ${videoId}...`);
-    
-    exec(command, { timeout: 30000 }, async (error, stdout, stderr) => {
-      if (!error) {
+    console.log(`[yt-dlp] Last resort for ${videoId}...`);
+    exec(command, { timeout: 15000 }, (error, stdout) => {
+      if (!error && stdout.trim()) {
         const url = stdout.trim().split('\n')[0];
-        if (url && url.startsWith('http')) {
-          STREAM_URL_CACHE.set(videoId, { url, expiry: Date.now() + CACHE_TTL });
-          return resolve(url);
-        }
+        STREAM_URL_CACHE.set(videoId, { url, expiry: Date.now() + CACHE_TTL });
+        resolve(url);
+      } else {
+        reject(new Error('All extraction methods failed'));
       }
-
-      console.warn(`[yt-dlp] Failed for ${videoId}. Error: ${error?.message || 'Invalid output'}. Trying Invidious fallback...`);
-
-      // Fallback: Try multiple Invidious instances
-      const instances = [
-        'https://inv.nadeko.net',
-        'https://invidious.flokinet.to',
-        'https://yewtu.be',
-        'https://iv.ggtyler.dev'
-      ];
-
-      for (const instance of instances) {
-        try {
-          console.log(`[Invidious] Trying ${instance} for ${videoId}...`);
-          const res = await fetch(`${instance}/api/v1/videos/${videoId}`);
-          if (!res.ok) continue;
-          
-          const data = await res.json();
-          const audioFormat = data.adaptiveFormats?.find((f: any) => 
-            f.type?.includes('audio') && !f.type?.includes('video')
-          );
-
-          if (audioFormat && audioFormat.url) {
-            console.log(`[Invidious] Success! Got URL from ${instance}`);
-            STREAM_URL_CACHE.set(videoId, { url: audioFormat.url, expiry: Date.now() + CACHE_TTL });
-            return resolve(audioFormat.url);
-          }
-        } catch (e) {
-          console.warn(`[Invidious] Instance ${instance} failed.`);
-        }
-      }
-
-      reject(new Error(stderr || error?.message || 'All extraction methods failed'));
     });
   });
 }
