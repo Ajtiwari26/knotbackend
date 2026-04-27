@@ -34,55 +34,62 @@ export async function searchYouTube(
   query: string,
   maxResults: number = 20
 ): Promise<YouTubeSearchResult[]> {
-  try {
-    const searchResponse = await youtube.search.list({
-      part: ['snippet'],
-      q: query,
-      type: ['video'],
-      videoCategoryId: '10', // Music category
-      maxResults,
-      order: 'relevance',
-    });
+  // Try Official API First
+  if (process.env.YOUTUBE_API_KEY && process.env.YOUTUBE_API_KEY !== 'YOUR_KEY_HERE') {
+    try {
+      console.log(`[YouTube] Official API search for: ${query}`);
+      const searchResponse = await youtube.search.list({
+        part: ['snippet'],
+        q: query,
+        type: ['video'],
+        videoCategoryId: '10', // Music
+        maxResults,
+      });
 
-    const items = searchResponse.data.items || [];
-    if (items.length === 0) return [];
+      const items = searchResponse.data.items || [];
+      const videoIds = items.map(i => i.id?.videoId).filter(Boolean) as string[];
 
-    // Get video IDs for duration lookup
-    const videoIds = items
-      .map((item) => item.id?.videoId)
-      .filter(Boolean) as string[];
+      const detailsResponse = await youtube.videos.list({
+        part: ['contentDetails', 'snippet'],
+        id: videoIds,
+      });
 
-    // Fetch durations via videos.list
-    const detailsResponse = await youtube.videos.list({
-      part: ['contentDetails', 'snippet'],
-      id: videoIds,
-    });
-
-    const durationMap = new Map<string, number>();
-    for (const video of detailsResponse.data.items || []) {
-      if (video.id && video.contentDetails?.duration) {
-        durationMap.set(video.id, parseDuration(video.contentDetails.duration));
+      const durationMap = new Map();
+      for (const video of detailsResponse.data.items || []) {
+        durationMap.set(video.id, parseDuration(video.contentDetails?.duration || 'PT0S'));
       }
-    }
 
-    return items.map((item) => {
-      const videoId = item.id?.videoId || '';
-      return {
-        youtube_id: videoId,
+      return items.map(item => ({
+        youtube_id: item.id?.videoId || '',
         title: decodeHtml(item.snippet?.title || ''),
         artist: decodeHtml(item.snippet?.channelTitle || ''),
-        thumbnail:
-          item.snippet?.thumbnails?.high?.url ||
-          item.snippet?.thumbnails?.medium?.url ||
-          item.snippet?.thumbnails?.default?.url ||
-          `https://i.ytimg.com/vi/${videoId}/hqdefault.jpg`,
-        duration_ms: durationMap.get(videoId) || 0,
-        published_at: item.snippet?.publishedAt || '',
-      };
-    });
+        thumbnail: item.snippet?.thumbnails?.high?.url || '',
+        duration_ms: durationMap.get(item.id?.videoId) || 0,
+        published_at: item.snippet?.publishedAt || ''
+      }));
+    } catch (e) {
+      console.warn('[YouTube] Official API failed, falling back to scraper...');
+    }
+  }
+
+  // Fallback: Innertube Scraper
+  try {
+    const { Innertube } = require('youtubei.js');
+    const yt = await Innertube.create();
+    const search = await yt.search(query, { type: 'video' });
+    const results = search.results?.filter((r: any) => r.type === 'Video') || [];
+    
+    return results.slice(0, maxResults).map((video: any) => ({
+      youtube_id: video.id,
+      title: video.title?.text || 'Unknown',
+      artist: video.author?.name || 'Unknown',
+      thumbnail: video.thumbnails?.[0]?.url || '',
+      duration_ms: (video.duration?.seconds || 0) * 1000,
+      published_at: video.published?.text || ''
+    }));
   } catch (error) {
-    console.error('[YouTube Service] Search error:', error);
-    throw error;
+    console.error('[YouTube] Scraper fallback failed:', error);
+    return [];
   }
 }
 
@@ -139,62 +146,73 @@ export async function getStreamUrl(videoId: string): Promise<string> {
     return cached.url;
   }
 
-  // Tier 1: YouTubei.js (Innertube) - Mimics Android App
-  try {
-    console.log(`[Innertube] Attempting extraction for ${videoId}...`);
-    const { Innertube } = require('youtubei.js');
-    // Using YTMUSIC client is much more robust for official music tracks
-    const youtube = await Innertube.create({ client: 'YTMUSIC' });
-    const info = await youtube.getBasicInfo(videoId);
-    const format = info.chooseFormat({ type: 'audio', quality: 'best' });
-    
-    if (format) {
-      // In YTMUSIC mode, we usually don't need manual deciphering if the library handles it
-      const url = format.url || (await format.decipher?.(youtube.session.player));
-      if (url) {
-        console.log(`[Innertube] Success via YTMUSIC!`);
-        STREAM_URL_CACHE.set(videoId, { url, expiry: Date.now() + CACHE_TTL });
-        return url;
-      }
-    }
-  } catch (e) {
-    console.warn(`[Innertube] Failed for ${videoId}:`, (e as Error).message);
-  }
+  const ytUrl = `https://www.youtube.com/watch?v=${videoId}`;
 
-  // Tier 2: Piped API Fallback
+  // Tier 1: yt-dlp (Primary in 2026 - most reliable)
   try {
-    console.log(`[Piped] Trying fallback for ${videoId}...`);
-    const res = await fetch(`https://pipedapi.kavin.rocks/streams/${videoId}`);
-    if (res.ok) {
-      const data = await res.json();
-      const audio = data.audioStreams?.find((s: any) => s.format === 'WEBM_OPUS' || s.bitrate > 100000);
-      if (audio?.url) {
-        console.log(`[Piped] Success!`);
-        STREAM_URL_CACHE.set(videoId, { url: audio.url, expiry: Date.now() + CACHE_TTL });
-        return audio.url;
-      }
-    }
-  } catch (e) {
-    console.warn(`[Piped] Failed.`);
-  }
-
-  // Tier 3: Last Resort - yt-dlp
-  return new Promise((resolve, reject) => {
-    const ytUrl = `https://www.youtube.com/watch?v=${videoId}`;
+    console.log(`[yt-dlp] Primary extraction for ${videoId}...`);
     const cookieFlag = hasCookies ? `--cookies ${COOKIE_PATH}` : '';
-    const command = `yt-dlp ${cookieFlag} -f "bestaudio" -g "${ytUrl}"`;
+    // --no-check-certificates and --geo-bypass for robustness
+    // --extractor-args to try multiple client identities
+    const command = `yt-dlp ${cookieFlag} --no-check-certificates --geo-bypass -f "bestaudio" -g "${ytUrl}"`;
 
-    console.log(`[yt-dlp] Last resort for ${videoId}...`);
-    exec(command, { timeout: 15000 }, (error, stdout) => {
-      if (!error && stdout.trim()) {
-        const url = stdout.trim().split('\n')[0];
-        STREAM_URL_CACHE.set(videoId, { url, expiry: Date.now() + CACHE_TTL });
-        resolve(url);
-      } else {
-        reject(new Error('All extraction methods failed'));
-      }
+    const url = await new Promise<string>((resolve, reject) => {
+      exec(command, { timeout: 10000 }, (error, stdout) => {
+        if (!error && stdout.trim()) {
+          resolve(stdout.trim().split('\n')[0]);
+        } else {
+          reject(error || new Error('yt-dlp failed'));
+        }
+      });
     });
-  });
+
+    if (url) {
+      console.log(`[yt-dlp] Success!`);
+      STREAM_URL_CACHE.set(videoId, { url, expiry: Date.now() + CACHE_TTL });
+      return url;
+    }
+  } catch (e) {
+    console.warn(`[yt-dlp] Failed:`, (e as Error).message);
+  }
+
+  // Tier 2: @distube/ytdl-core (Reliable on residential IPs)
+  try {
+    console.log(`[ytdl-core] Fallback extraction for ${videoId}...`);
+    const ytdl = require('@distube/ytdl-core');
+    const info = await ytdl.getInfo(videoId);
+    const format = ytdl.chooseFormat(info.formats, { 
+      filter: 'audioonly', 
+      quality: 'highestaudio' 
+    });
+    
+    if (format?.url) {
+      console.log(`[ytdl-core] Success!`);
+      STREAM_URL_CACHE.set(videoId, { url: format.url, expiry: Date.now() + CACHE_TTL });
+      return format.url;
+    }
+  } catch (e) {
+    console.warn(`[ytdl-core] Failed.`);
+  }
+
+  // Tier 3: Innertube (ANDROID_TESTSUITE identity)
+  try {
+    console.log(`[Innertube] Fallback extraction for ${videoId}...`);
+    const { Innertube } = require('youtubei.js');
+    const yt = await Innertube.create();
+    const info = await yt.getBasicInfo(videoId);
+    const format = info.chooseFormat({ type: 'audio', quality: 'best' });
+    const url = format?.url || (await format?.decipher?.(yt.session.player));
+    
+    if (url) {
+      console.log(`[Innertube] Success!`);
+      STREAM_URL_CACHE.set(videoId, { url, expiry: Date.now() + CACHE_TTL });
+      return url;
+    }
+  } catch (e) {
+    console.warn(`[Innertube] Failed.`);
+  }
+
+  throw new Error('All extraction methods failed');
 }
 
 function decodeHtml(html: string): string {

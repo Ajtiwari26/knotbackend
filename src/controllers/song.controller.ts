@@ -10,11 +10,11 @@ dotenv.config();
  */
 export const enqueueDownload = async (req: Request, res: Response): Promise<void> => {
   try {
-    const { id } = req.params; // youtube_id
+    const id = req.params.id as string;
     
-    // Start processing in background (don't await so we can return 202)
+    // Trigger download in background
     processDownload(id).catch(err => {
-      console.error(`[Controller] Background download failed for ${id}:`, err);
+      console.error(`[Download] Failed for ${id}:`, err);
     });
     
     res.status(202).json({

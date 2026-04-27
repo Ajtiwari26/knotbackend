@@ -46,40 +46,66 @@ export class GroqService {
     console.log(`[Groq] Fetching transcript for ${youtubeId}...`);
     
     let transcriptData;
+    let transcriptText = '';
+
     try {
       transcriptData = await YoutubeTranscript.fetchTranscript(youtubeId);
+      transcriptText = transcriptData
+        .map(t => `[${Math.round(t.offset)}ms] ${t.text}`)
+        .join('\n');
     } catch (e) {
-      console.warn(`[Groq] No transcript found for ${youtubeId}`);
-      throw new Error('No transcript available for this video.');
+      console.warn(`[Groq] Primary transcript fetch failed for ${youtubeId}, trying mirror fallback...`);
+      
+      // Fallback: Try Piped API for captions
+      try {
+        const res = await fetch(`https://pipedapi.kavin.rocks/captions/${youtubeId}`);
+        if (res.ok) {
+          const captions = await res.json();
+          const track = captions.find((t: any) => t.language === 'en') || captions[0];
+          if (track?.url) {
+            const transcriptRes = await fetch(track.url);
+            transcriptText = await transcriptRes.text(); // This might be VTT/SRT, Groq can handle it
+          }
+        }
+      } catch (mirrorErr) {
+        console.error('[Groq] Mirror transcript fallback also failed.');
+      }
     }
 
-    const transcriptText = transcriptData
-      .map(t => `[${Math.round(t.offset)}ms] ${t.text}`)
-      .join('\n');
+    if (!transcriptText) {
+      throw new Error('No transcript available for this video (All methods failed).');
+    }
+
+    // Save for user inspection
+    try {
+      const fs = require('fs');
+      const path = require('path');
+      const logDir = path.join(process.cwd(), 'logs');
+      if (!fs.existsSync(logDir)) fs.mkdirSync(logDir);
+      fs.writeFileSync(path.join(logDir, 'latest_transcript.txt'), transcriptText);
+      console.log(`[Groq] Transcript saved to logs/latest_transcript.txt`);
+    } catch (e) {
+      console.warn('[Groq] Failed to save transcript file.');
+    }
 
     const activeKey = this.getNextKey();
     console.log(`[Groq] Using API Key Index: ${currentKeyIndex - 1} (Load Balanced)`);
 
     const systemPrompt = `
-      You are the "Knot" AI Music Editor. Your job is to analyze a timestamped transcript and identify "Lyrical Stanzas" to KEEP and "Boring/Non-Lyrical Parts" to KNOT (skip).
+      You are the "Knot" AI Music Editor.
+      
+      RULES:
+      1. SECTIONS: Only include meaningful, sustained lyrical stanzas. NEVER include [संगीत] or [प्रशंसा] in the 'sections' array.
+      2. FRAGMENTS: If a tiny phrase (1-3 words) appears and is followed by a long instrumental gap (> 5s), it is an "Intro Fragment" or "Ad-lib"—KNOT it and do NOT make it a section.
+      3. KNOT all instrumental gaps > 4 seconds.
+      4. Use RAW transcript timestamps.
+      5. Output VALID JSON only.
 
-      STRATEGY:
-      1. Identify ONLY the stanzas with lyrics. These are your "Islands of Interest."
-      2. Everything that is NOT a lyrical stanza is a KNOT. This includes:
-         - The Instrumental Intro (from 0ms to the first lyric).
-         - Long Instrumental Breaks (music-only gaps between stanzas > 5 seconds).
-         - The Instrumental Outro (from the last lyric to the end).
-         - Redundant repeated choruses (keep the first two, knot the rest if the song is > 4 mins).
-
-      TASK:
-      - Extract the 'junctions' (knots) for all non-lyrical parts.
-      - Extract the 'sections' (stanzas) with their cleaned-up lyrics as titles.
-
-      OUTPUT ONLY VALID JSON:
+      JSON STRUCTURE:
       {
         "junctions": [{"start_ms": number, "end_ms": number, "reason": "string"}],
         "sections": [{"start_ms": number, "title": "string", "lyrics": "string"}],
-        "summary": "1-sentence summary of the song's energy",
+        "summary": "string",
         "vibe_check": "string"
       }
     `;
@@ -99,8 +125,7 @@ export class GroqService {
             { role: 'system', content: systemPrompt },
             { role: 'user', content: userPrompt }
           ],
-          response_format: { type: 'json_object' },
-          temperature: 0.1
+          response_format: { type: 'json_object' }
         })
       });
 
@@ -111,6 +136,34 @@ export class GroqService {
 
       const data = await response.json();
       const result = JSON.parse(data.choices[0].message.content);
+
+      // --- POST-PROCESSING (Bulletproof Math) ---
+      
+      // 1. Apply 1s Buffer to all sections
+      if (result.sections) {
+        result.sections = result.sections.map((s: any) => ({
+          ...s,
+          start_ms: Math.max(0, s.start_ms - 1000)
+        }));
+      }
+
+      // 2. Ensure Intro Knot (0 to first section)
+      if (result.sections && result.sections.length > 0) {
+        const firstStart = result.sections[0].start_ms;
+        if (firstStart > 5000) { // If intro is > 5s
+          result.junctions = [
+            { start_ms: 0, end_ms: firstStart, reason: "Aggressive Intro Knot" },
+            ...(result.junctions || [])
+          ];
+        }
+      }
+
+      // Save for user analysis
+      try {
+        const fs = require('fs');
+        const path = require('path');
+        fs.writeFileSync(path.join(process.cwd(), 'logs', 'latest_knots.json'), JSON.stringify(result, null, 2));
+      } catch (e) {}
       
       console.log(`[Groq] Instant analysis complete for ${youtubeId}`);
       return result;
@@ -118,6 +171,8 @@ export class GroqService {
       console.error(`[Groq] Request failed:`, error);
       throw error;
     }
+  }
+
   /**
    * Client-Provided Transcript Analysis (The "Courier" Method)
    */

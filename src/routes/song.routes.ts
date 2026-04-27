@@ -41,6 +41,25 @@ router.get('/search', async (req: Request, res: Response): Promise<void> => {
     });
 
     res.json(enriched);
+
+    // --- PRE-WARM CACHE (Background) ---
+    // Only pre-warm the top 3 results to avoid hitting rate limits too fast
+    const top3 = results.slice(0, 3);
+    setTimeout(async () => {
+      console.log(`[Backend] Pre-warming stream cache for top 3 search results...`);
+      for (const r of top3) {
+        try {
+          const cacheKey = `stream:${r.youtube_id}`;
+          if (!IN_MEMORY_CACHE.has(cacheKey) || IN_MEMORY_CACHE.get(cacheKey)!.expires < Date.now()) {
+            const url = await getStreamUrl(r.youtube_id);
+            IN_MEMORY_CACHE.set(cacheKey, { url, expires: Date.now() + 2 * 60 * 60 * 1000 });
+            console.log(`[Pre-warm] Cached ${r.youtube_id}`);
+          }
+        } catch (e) {
+          // Ignore pre-warm failures
+        }
+      }
+    }, 500);
   } catch (error) {
     console.error('[Search] Error:', error);
     res.status(500).json({ error: (error as Error).message });
@@ -174,13 +193,25 @@ function proxyAudioUrl(
   const mod = url.startsWith('https') ? require('https') : require('http');
   const parsedUrl = new URL(url);
 
+  const userAgents = [
+    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, Gecko) Chrome/120.0.0.0 Safari/537.36',
+    'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, Gecko) Chrome/119.0.0.0 Safari/537.36',
+    'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, Gecko) Chrome/118.0.0.0 Safari/537.36',
+    'Mozilla/5.0 (iPhone; CPU iPhone OS 16_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, Gecko) Version/16.6 Mobile/15E148 Safari/604.1'
+  ];
+  const randomUA = userAgents[Math.floor(Math.random() * userAgents.length)];
+
   const options: any = {
     hostname: parsedUrl.hostname,
     port: parsedUrl.port,
     path: parsedUrl.pathname + parsedUrl.search,
     method: 'GET',
     headers: {
-      'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+      'User-Agent': randomUA,
+      'Referer': 'https://www.youtube.com/',
+      'Origin': 'https://www.youtube.com',
+      'Accept': '*/*',
+      'Connection': 'keep-alive'
     },
   };
 
