@@ -16,8 +16,10 @@
   "dependencies": {
     "@distube/ytdl-core": "^4.16.12",
     "@google/generative-ai": "^0.24.1",
+    "axios": "^1.16.0",
     "bcrypt": "^6.0.0",
     "bullmq": "^5.75.2",
+    "cheerio": "^1.2.0",
     "cors": "^2.8.6",
     "dotenv": "^17.4.2",
     "express": "^5.2.1",
@@ -37,6 +39,7 @@
   },
   "devDependencies": {
     "@types/bcrypt": "^6.0.0",
+    "@types/cheerio": "^0.22.35",
     "@types/cors": "^2.8.19",
     "@types/express": "^5.0.6",
     "@types/jsonwebtoken": "^9.0.10",

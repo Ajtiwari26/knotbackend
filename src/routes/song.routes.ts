@@ -7,10 +7,57 @@ import { searchYouTube, getVideoDetails, getStreamUrl } from '../services/youtub
 import { exec, spawn } from 'child_process';
 import fs from 'fs';
 import path from 'path';
+import { PagalworldService } from '../services/pagalworld.service';
+import { streamPagalworld } from '../controllers/stream.controller';
 
 const router = Router();
 
 // ─── Routes ───────────────────────────────────────────────────────────────────
+
+/**
+ * Pagalworld search
+ */
+router.get('/pagalworld/search', async (req: Request, res: Response): Promise<void> => {
+  try {
+    const q = req.query.q as string;
+    if (!q || q.trim().length === 0) {
+      res.json([]);
+      return;
+    }
+    const results = await PagalworldService.searchSongs(q.trim());
+    res.json(results);
+  } catch (error) {
+    console.error('[Pagalworld Search] Error:', error);
+    res.status(500).json({ error: (error as Error).message });
+  }
+});
+
+/**
+ * Pagalworld metadata extraction
+ */
+router.get('/pagalworld/metadata', async (req: Request, res: Response): Promise<void> => {
+  try {
+    const url = req.query.url as string;
+    if (!url) {
+      res.status(400).json({ error: 'URL is required' });
+      return;
+    }
+    const metadata = await PagalworldService.getSongMetadata(url);
+    if (!metadata) {
+      res.status(404).json({ error: 'Metadata not found' });
+      return;
+    }
+    res.json(metadata);
+  } catch (error) {
+    console.error('[Pagalworld Metadata] Error:', error);
+    res.status(500).json({ error: (error as Error).message });
+  }
+});
+
+/**
+ * Pagalworld audio proxy
+ */
+router.get('/pagalworld/stream', streamPagalworld);
 
 /**
  * YouTube search — uses YouTube Data API v3
@@ -194,10 +241,10 @@ function proxyAudioUrl(
   const parsedUrl = new URL(url);
 
   const userAgents = [
-    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, Gecko) Chrome/120.0.0.0 Safari/537.36',
-    'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, Gecko) Chrome/119.0.0.0 Safari/537.36',
-    'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, Gecko) Chrome/118.0.0.0 Safari/537.36',
-    'Mozilla/5.0 (iPhone; CPU iPhone OS 16_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, Gecko) Version/16.6 Mobile/15E148 Safari/604.1'
+    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+    'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36',
+    'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/118.0.0.0 Safari/537.36',
+    'Mozilla/5.0 (iPhone; CPU iPhone OS 16_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.6 Mobile/15E148 Safari/604.1'
   ];
   const randomUA = userAgents[Math.floor(Math.random() * userAgents.length)];
 
