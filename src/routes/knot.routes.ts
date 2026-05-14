@@ -200,9 +200,20 @@ router.delete('/:id', protect, async (req: AuthRequest, res: Response): Promise<
 // AUTO-KNOTTING ENGINE — Three-Tier Proxy Routes
 // ══════════════════════════════════════════════════════════════
 
-// On Render, the service is named 'autoknotengine' per user confirmation
-const AUTO_KNOT_ENGINE_URL = process.env.AUTO_KNOT_ENGINE_URL || 'https://autoknotengine.onrender.com';
-const MODAL_PRO_URL = process.env.MODAL_PRO_URL || 'https://YOUR_APP--knot-pro-analyze-web.modal.run';
+// Six auto-knotting engines for distributed processing of long songs
+const AUTO_KNOT_ENGINE_URLS = [
+  process.env.AUTO_KNOT_ENGINE_URL_1,
+  process.env.AUTO_KNOT_ENGINE_URL_2,
+  process.env.AUTO_KNOT_ENGINE_URL_3,
+  process.env.AUTO_KNOT_ENGINE_URL_4,
+  process.env.AUTO_KNOT_ENGINE_URL_5,
+  process.env.AUTO_KNOT_ENGINE_URL_6
+].filter(url => url); // Filter out any undefined/empty URLs
+
+const MODAL_PRO_URL = process.env.MODAL_PRO_URL || '';
+
+// Legacy single URL support (uses first engine)
+const AUTO_KNOT_ENGINE_URL = AUTO_KNOT_ENGINE_URLS[0];
 
 
 /**
@@ -213,12 +224,12 @@ router.post('/auto-knot', upload.single('file'), async (req: Request, res: Respo
     const { song_title, duration_ms, sensitivity = 'balanced', youtube_id, stream_url } = req.body;
 
     if (youtube_id) {
-      console.log(`[AutoKnot] Using Distributed Gateway for YouTube ID: ${youtube_id}`);
-      const result = await DistributedGateway.analyzeYoutube(youtube_id, sensitivity, stream_url);
+      console.log(`[AutoKnot] Using Distributed Gateway (Fast) for YouTube ID: ${youtube_id}`);
+      const result = await DistributedGateway.analyzeYoutube(youtube_id, sensitivity, stream_url, 'fast');
       res.json({
         ...result,
         knot_count: result.junctions.length,
-        method: 'distributed'
+        method: 'distributed_fast'
       });
       return;
     }
@@ -239,6 +250,7 @@ router.post('/auto-knot', upload.single('file'), async (req: Request, res: Respo
     const formData = new FormData();
     formData.append('file', fileBlob, req.file.originalname || 'audio.m4a');
     formData.append('sensitivity', sensitivity);
+    formData.append('engine', 'fast');
     
     // Pass the original device URI if needed
     if (req.body.song_uri) formData.append('device_uri', req.body.song_uri);
@@ -293,9 +305,8 @@ router.post('/auto-knot-pro', upload.single('file'), async (req: Request, res: R
 
     if (youtube_id) {
       console.log(`[AutoKnot] Pro: Using Distributed Gateway for YouTube ID: ${youtube_id}`);
-      // In a real Pro tier, we might use Modal or more nodes. 
-      // For now, we reuse the distributed gateway but could increase nodes if available.
-      const result = await DistributedGateway.analyzeYoutube(youtube_id, sensitivity, stream_url);
+      // Now passing 'pro' to the gateway
+      const result = await DistributedGateway.analyzeYoutube(youtube_id, sensitivity, stream_url, 'pro');
       res.json({
         ...result,
         knot_count: result.junctions.length,
@@ -311,8 +322,7 @@ router.post('/auto-knot-pro', upload.single('file'), async (req: Request, res: R
 
     console.log(`[AutoKnot] Pro analysis requested for: ${song_title}`);
 
-    // Modal can either accept multipart/form-data or Base64 in JSON depending on the endpoint.
-    // For simplicity, we'll forward it as FormData just like the Fast tier
+    // Read the uploaded file into a Blob
     const fileBuffer = await fs.promises.readFile(req.file.path);
     const fileBlob = new Blob([fileBuffer], { type: req.file.mimetype || 'audio/mpeg' });
 
@@ -320,11 +330,19 @@ router.post('/auto-knot-pro', upload.single('file'), async (req: Request, res: R
     formData.append('file', fileBlob, req.file.originalname || 'audio.m4a');
     formData.append('filename', song_title);
     formData.append('sensitivity', sensitivity);
+    formData.append('engine', 'pro');
+
+    // Check if Modal Pro URL is configured
+    if (!MODAL_PRO_URL) {
+      res.status(503).json({ error: 'Modal Pro engine not configured. Please set MODAL_PRO_URL environment variable.' });
+      return;
+    }
 
     // Increase timeout to 10 minutes for Modal GPU engine
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), 600000);
 
+    console.log(`[AutoKnot] Proxying Pro upload to: ${MODAL_PRO_URL}`);
     const response = await fetch(MODAL_PRO_URL, {
       method: 'POST',
       body: formData,
@@ -332,6 +350,9 @@ router.post('/auto-knot-pro', upload.single('file'), async (req: Request, res: R
     });
     
     clearTimeout(timeoutId);
+
+    const elapsed = (Date.now() - (req as any)._startTime || Date.now()) / 1000;
+    console.log(`[AutoKnot] Pro engine response: ${response.status}`);
 
     // Clean up temporary file
     await fs.promises.unlink(req.file.path).catch(console.error);
