@@ -31,7 +31,8 @@ export class PagalfreeService {
             // PagalFree uses REST-style search: https://pagalfree.com/search/[query]
             const searchUrl = `${PAGALFREE_BASE}/search/${encodeURIComponent(query)}`;
             const { data: html } = await axios.get(searchUrl, {
-                headers: { 'User-Agent': USER_AGENT }
+                headers: { 'User-Agent': USER_AGENT },
+                timeout: 15000
             });
 
             const $ = cheerio.load(html);

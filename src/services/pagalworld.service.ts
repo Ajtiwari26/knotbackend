@@ -29,7 +29,8 @@ export class PagalworldService {
         try {
             const searchUrl = `${PAGALWORLD_BASE}/search/?s=${encodeURIComponent(query)}`;
             const { data: html } = await axios.get(searchUrl, {
-                headers: { 'User-Agent': USER_AGENT }
+                headers: { 'User-Agent': USER_AGENT },
+                timeout: 15000
             });
 
             const $ = cheerio.load(html);

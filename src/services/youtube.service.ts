@@ -153,15 +153,18 @@ export async function getStreamUrl(videoId: string): Promise<string> {
     console.log(`[yt-dlp] Primary extraction for ${videoId}...`);
     const cookieFlag = hasCookies ? `--cookies ${COOKIE_PATH}` : '';
     // --no-check-certificates and --geo-bypass for robustness
-    // --extractor-args to try multiple client identities
-    const command = `yt-dlp ${cookieFlag} --no-check-certificates --geo-bypass -f "bestaudio" -g "${ytUrl}"`;
+    // --extractor-args to try multiple client identities (android,ios,web)
+    // --no-cache-dir to avoid corrupted cache issues
+    const command = `yt-dlp ${cookieFlag} --no-check-certificates --geo-bypass --no-cache-dir --extractor-args "youtube:player-client=android,web,ios" -f "bestaudio" -g "${ytUrl}"`;
 
     const url = await new Promise<string>((resolve, reject) => {
-      exec(command, { timeout: 10000 }, (error, stdout) => {
+      exec(command, { timeout: 15000 }, (error, stdout, stderr) => {
         if (!error && stdout.trim()) {
           resolve(stdout.trim().split('\n')[0]);
         } else {
-          reject(error || new Error('yt-dlp failed'));
+          const errMsg = stderr || error?.message || 'yt-dlp failed';
+          console.error(`[yt-dlp] Error for ${videoId}:`, errMsg);
+          reject(new Error(errMsg));
         }
       });
     });
