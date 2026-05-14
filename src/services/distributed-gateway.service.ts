@@ -14,7 +14,7 @@ const REMOTE_ENGINE_URLS = [
   process.env.AUTO_KNOT_ENGINE_URL_4,
   process.env.AUTO_KNOT_ENGINE_URL_5,
   process.env.AUTO_KNOT_ENGINE_URL_6
-].filter(url => url); // Filter out any undefined/empty URLs
+].filter((url): url is string => !!url); // Filter out any undefined/empty URLs
 
 // Local engine ports (for testing)
 const LOCAL_ENGINE_PORTS = [5001, 5002, 5003];
