@@ -240,7 +240,12 @@ router.post('/auto-knot', upload.single('file'), async (req: Request, res: Respo
     }
 
     console.log(`[AutoKnot] Fast analysis requested for: ${song_title}`);
-    console.log(`[AutoKnot] Proxying to: ${AUTO_KNOT_ENGINE_URL}/analyze`);
+    
+    // Get healthy engines and pick one at random for load balancing
+    const healthyEngines = await DistributedGateway.getAvailableEngines();
+    const targetEngineUrl = healthyEngines[Math.floor(Math.random() * healthyEngines.length)] || AUTO_KNOT_ENGINE_URLS[0];
+    
+    console.log(`[AutoKnot] Proxying to: ${targetEngineUrl}/analyze`);
 
     // Read the uploaded file into a Blob
     const fileBuffer = await fs.promises.readFile(req.file.path);
@@ -260,7 +265,7 @@ router.post('/auto-knot', upload.single('file'), async (req: Request, res: Respo
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), 600000);
 
-    const response = await fetch(`${AUTO_KNOT_ENGINE_URL}/analyze`, {
+    const response = await fetch(`${targetEngineUrl}/analyze`, {
       method: 'POST',
       body: formData,
       signal: controller.signal,
