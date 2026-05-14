@@ -74,3 +74,67 @@ export const streamPagalworld = async (req: Request, res: Response): Promise<voi
         }
     }
 };
+
+export const streamPagalfree = async (req: Request, res: Response): Promise<void> => {
+    const { url } = req.query;
+
+    if (!url) {
+        res.status(400).json({ error: 'Missing parameter: url is required.' });
+        return;
+    }
+
+    try {
+        const headers: Record<string, string> = {
+            'User-Agent': USER_AGENT,
+            'Referer': 'https://pagalfree.com/'
+        };
+
+        if (req.headers.range) {
+            headers['Range'] = req.headers.range as string;
+        }
+
+        console.log(`[PagalfreeProxy] Requesting: ${url}`);
+
+        const response = await axios({
+            method: 'get',
+            url: url as string,
+            headers: headers,
+            responseType: 'stream',
+            maxRedirects: 5,
+            validateStatus: (status) => status >= 200 && status < 400 || status === 206
+        });
+
+        const forwardHeaders = [
+            'content-type',
+            'content-length',
+            'content-range',
+            'accept-ranges',
+            'etag',
+            'last-modified',
+            'cache-control'
+        ];
+
+        forwardHeaders.forEach(header => {
+            if (response.headers[header]) {
+                res.setHeader(header, response.headers[header]);
+            }
+        });
+
+        res.status(response.status);
+        response.data.pipe(res);
+
+        req.on('close', () => {
+            if (response.data.destroy) {
+                response.data.destroy();
+            }
+        });
+
+    } catch (error: any) {
+        console.error('[PagalfreeProxy] Error:', error.message);
+        if (error.response) {
+            res.status(error.response.status).json({ error: 'Proxy request failed', details: error.message });
+        } else {
+            res.status(500).json({ error: 'Internal server error', details: error.message });
+        }
+    }
+};

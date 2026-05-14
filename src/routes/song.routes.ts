@@ -8,7 +8,8 @@ import { exec, spawn } from 'child_process';
 import fs from 'fs';
 import path from 'path';
 import { PagalworldService } from '../services/pagalworld.service';
-import { streamPagalworld } from '../controllers/stream.controller';
+import { PagalfreeService } from '../services/pagalfree.service';
+import { streamPagalworld, streamPagalfree } from '../controllers/stream.controller';
 
 const router = Router();
 
@@ -55,9 +56,54 @@ router.get('/pagalworld/metadata', async (req: Request, res: Response): Promise<
 });
 
 /**
+ * Pagalfree search
+ */
+router.get('/pagalfree/search', async (req: Request, res: Response): Promise<void> => {
+  try {
+    const q = req.query.q as string;
+    if (!q || q.trim().length === 0) {
+      res.json([]);
+      return;
+    }
+    const results = await PagalfreeService.searchSongs(q.trim());
+    res.json(results);
+  } catch (error) {
+    console.error('[Pagalfree Search] Error:', error);
+    res.status(500).json({ error: (error as Error).message });
+  }
+});
+
+/**
+ * Pagalfree metadata extraction
+ */
+router.get('/pagalfree/metadata', async (req: Request, res: Response): Promise<void> => {
+  try {
+    const url = req.query.url as string;
+    if (!url) {
+      res.status(400).json({ error: 'URL is required' });
+      return;
+    }
+    const metadata = await PagalfreeService.getSongMetadata(url);
+    if (!metadata) {
+      res.status(404).json({ error: 'Metadata not found' });
+      return;
+    }
+    res.json(metadata);
+  } catch (error) {
+    console.error('[Pagalfree Metadata] Error:', error);
+    res.status(500).json({ error: (error as Error).message });
+  }
+});
+
+/**
  * Pagalworld audio proxy
  */
 router.get('/pagalworld/stream', streamPagalworld);
+
+/**
+ * Pagalfree audio proxy
+ */
+router.get('/pagalfree/stream', streamPagalfree);
 
 /**
  * YouTube search — uses YouTube Data API v3
