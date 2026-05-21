@@ -9,7 +9,9 @@ import fs from 'fs';
 import path from 'path';
 import { PagalworldService } from '../services/pagalworld.service';
 import { PagalfreeService } from '../services/pagalfree.service';
-import { streamPagalworld, streamPagalfree } from '../controllers/stream.controller';
+import { JiosaavnService } from '../services/jiosaavn.service';
+import { streamPagalworld, streamPagalfree, streamJiosaavn } from '../controllers/stream.controller';
+
 
 const router = Router();
 
@@ -25,7 +27,9 @@ router.get('/pagalworld/search', async (req: Request, res: Response): Promise<vo
       res.json([]);
       return;
     }
+    console.log(`[Pagalworld Search] Query: "${q}"`);
     const results = await PagalworldService.searchSongs(q.trim());
+    console.log(`[Pagalworld Search] Found ${results.length} results`);
     res.json(results);
   } catch (error) {
     console.error('[Pagalworld Search] Error:', error);
@@ -65,7 +69,9 @@ router.get('/pagalfree/search', async (req: Request, res: Response): Promise<voi
       res.json([]);
       return;
     }
+    console.log(`[Pagalfree Search] Query: "${q}"`);
     const results = await PagalfreeService.searchSongs(q.trim());
+    console.log(`[Pagalfree Search] Found ${results.length} results`);
     res.json(results);
   } catch (error) {
     console.error('[Pagalfree Search] Error:', error);
@@ -104,6 +110,80 @@ router.get('/pagalworld/stream', streamPagalworld);
  * Pagalfree audio proxy
  */
 router.get('/pagalfree/stream', streamPagalfree);
+
+/**
+ * JioSaavn search
+ */
+router.get('/jiosaavn/search', async (req: Request, res: Response): Promise<void> => {
+  try {
+    const q = req.query.q as string;
+    if (!q || q.trim().length === 0) {
+      res.json([]);
+      return;
+    }
+    console.log(`[JioSaavn Search] Query: "${q}"`);
+    const results = await JiosaavnService.searchSongs(q.trim());
+    console.log(`[JioSaavn Search] Found ${results.length} results`);
+    res.json(results);
+  } catch (error) {
+    console.error('[JioSaavn Search] Error:', error);
+    res.status(500).json({ error: (error as Error).message });
+  }
+});
+
+/**
+ * JioSaavn metadata extraction
+ */
+router.get('/jiosaavn/metadata', async (req: Request, res: Response): Promise<void> => {
+  try {
+    const token = req.query.token as string;
+    if (!token) {
+      res.status(400).json({ error: 'Token is required' });
+      return;
+    }
+    const metadata = await JiosaavnService.getSongMetadata(token);
+    if (!metadata) {
+      res.status(404).json({ error: 'Metadata not found' });
+      return;
+    }
+    res.json(metadata);
+  } catch (error) {
+    console.error('[JioSaavn Metadata] Error:', error);
+    res.status(500).json({ error: (error as Error).message });
+  }
+});
+
+/**
+ * JioSaavn audio proxy
+ */
+router.get('/jiosaavn/stream', streamJiosaavn);
+
+
+/**
+ * YouTube download URL - Returns direct download link for YouTube audio
+ */
+router.get('/youtube/download', async (req: Request, res: Response): Promise<void> => {
+  try {
+    const youtube_id = req.query.youtube_id as string;
+    if (!youtube_id) {
+      res.status(400).json({ error: 'youtube_id is required' });
+      return;
+    }
+
+    console.log(`[YouTube Download] Getting download URL for: ${youtube_id}`);
+    
+    // Get the stream URL (this is the direct audio URL)
+    const streamUrl = await getStreamUrl(youtube_id);
+    
+    res.json({ 
+      downloadUrl: streamUrl,
+      youtube_id: youtube_id
+    });
+  } catch (error) {
+    console.error('[YouTube Download] Error:', error);
+    res.status(500).json({ error: (error as Error).message });
+  }
+});
 
 /**
  * YouTube search — uses YouTube Data API v3

@@ -18,6 +18,16 @@ const youtube = google.youtube({
   auth: process.env.YOUTUBE_API_KEY,
 });
 
+let innertubeInstance: any = null;
+async function getInnertube() {
+  if (!innertubeInstance) {
+    const { Innertube } = require('youtubei.js');
+    console.log('[YouTube] Initializing singleton Innertube instance...');
+    innertubeInstance = await Innertube.create();
+  }
+  return innertubeInstance;
+}
+
 export interface YouTubeSearchResult {
   youtube_id: string;
   title: string;
@@ -74,8 +84,7 @@ export async function searchYouTube(
 
   // Fallback: Innertube Scraper
   try {
-    const { Innertube } = require('youtubei.js');
-    const yt = await Innertube.create();
+    const yt = await getInnertube();
     const search = await yt.search(query, { type: 'video' });
     const results = search.results?.filter((r: any) => r.type === 'Video') || [];
     
@@ -155,10 +164,10 @@ export async function getStreamUrl(videoId: string): Promise<string> {
     // --no-check-certificates and --geo-bypass for robustness
     // --extractor-args to try multiple client identities (android,ios,web)
     // --no-cache-dir to avoid corrupted cache issues
-    const command = `yt-dlp ${cookieFlag} --no-check-certificates --geo-bypass --no-cache-dir --extractor-args "youtube:player-client=android,web,ios" -f "bestaudio" -g "${ytUrl}"`;
+    const command = `yt-dlp ${cookieFlag} --no-check-certificates --geo-bypass --no-cache-dir --extractor-args "youtube:player-client=android,web,ios" -f "bestaudio/best" -g "${ytUrl}"`;
 
     const url = await new Promise<string>((resolve, reject) => {
-      exec(command, { timeout: 15000 }, (error, stdout, stderr) => {
+      exec(command, { timeout: 20000 }, (error, stdout, stderr) => {
         if (!error && stdout.trim()) {
           resolve(stdout.trim().split('\n')[0]);
         } else {
@@ -200,8 +209,7 @@ export async function getStreamUrl(videoId: string): Promise<string> {
   // Tier 3: Innertube (ANDROID_TESTSUITE identity)
   try {
     console.log(`[Innertube] Fallback extraction for ${videoId}...`);
-    const { Innertube } = require('youtubei.js');
-    const yt = await Innertube.create();
+    const yt = await getInnertube();
     const info = await yt.getBasicInfo(videoId);
     const format = info.chooseFormat({ type: 'audio', quality: 'best' });
     const url = format?.url || (await format?.decipher?.(yt.session.player));

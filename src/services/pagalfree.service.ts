@@ -39,26 +39,61 @@ export class PagalfreeService {
             const results: PagalfreeSong[] = [];
 
             // The search results are usually links inside divs or lists
-            // Based on snapshot: link contains title and artist
-            $('a[href*="/music/"]').each((_, el) => {
-                const $el = $(el);
-                const url = $el.attr('href');
+            $('div#category_content').each((_, el) => {
+                const $container = $(el);
+                const $link = $container.find('a[href*="/music/"]');
+                const url = $link.attr('href');
                 if (!url) return;
 
-                // Title usually in a StaticText or similar
-                // Example: "Boht Tej - Badshah 128 Kbps.mp3"
-                let title = $el.text().trim();
+                const fullText = $link.find('b').text().trim();
+                let cleanTitle = fullText.replace(/\s\d+\sKbps\.mp3/gi, '').trim();
+                let artist = 'Unknown';
+                let isHighQuality = fullText.includes('320 Kbps');
                 
-                // If it's a duplicate or quality-specific link from search, we might want to group them
-                // but for now let's just push them all
-                
-                const artist = $el.find('span, p, .artist').text().trim() || 'Unknown';
+                // Parse format: "Song Title - Artist Name" or "Song (Artist Version)"
+                if (cleanTitle.includes(' - ')) {
+                    const parts = cleanTitle.split(' - ');
+                    artist = parts.pop()?.trim() || 'Unknown';
+                    cleanTitle = parts.join(' - ').trim();
+                } else if (cleanTitle.includes('(') && cleanTitle.includes(')')) {
+                    const match = cleanTitle.match(/\((.*?)\)/);
+                    if (match) {
+                        artist = match[1].replace(/Version/gi, '').trim();
+                        cleanTitle = cleanTitle.replace(/\(.*?\)/, '').trim();
+                    }
+                }
 
-                if (title && !results.some(r => r.url === url)) {
+                // Extract image from img tag
+                let imageUrl = $link.find('img').attr('src');
+                
+                if (imageUrl) {
+                    if (!imageUrl.startsWith('http')) {
+                        imageUrl = `${PAGALFREE_BASE}${imageUrl.startsWith('/') ? '' : '/'}${imageUrl}`;
+                    }
+                    try {
+                        const imgUrlObj = new URL(imageUrl);
+                        imgUrlObj.pathname = imgUrlObj.pathname.split('/').map(segment => encodeURIComponent(decodeURIComponent(segment))).join('/');
+                        imageUrl = imgUrlObj.toString();
+                    } catch (e) {
+                        console.warn('[PagalfreeService] Failed to encode search image URL:', e);
+                    }
+                }
+
+                // Deduplication logic: if same title/artist exists, prefer 320kbps
+                const existingIndex = results.findIndex(r => r.title === cleanTitle && r.artist === artist);
+                const fullUrl = url.startsWith('http') ? url : `${PAGALFREE_BASE}${url}`;
+
+                if (existingIndex !== -1) {
+                    if (isHighQuality) {
+                        results[existingIndex].url = fullUrl;
+                        if (imageUrl) results[existingIndex].imageUrl = imageUrl;
+                    }
+                } else {
                     results.push({
-                        title: title.replace(/\s\d+\sKbps\.mp3/gi, '').trim(),
-                        url: url.startsWith('http') ? url : `${PAGALFREE_BASE}${url}`,
-                        artist: artist !== 'Unknown' ? artist : undefined
+                        title: cleanTitle,
+                        url: fullUrl,
+                        artist: artist !== 'Unknown' ? artist : undefined,
+                        imageUrl: imageUrl
                     });
                 }
             });
@@ -75,31 +110,55 @@ export class PagalfreeService {
      */
     static async getSongMetadata(songUrl: string): Promise<PagalfreeMetadata | null> {
         try {
+            console.log(`[PagalfreeService] Fetching metadata from: ${songUrl}`);
             const { data: html } = await axios.get(songUrl, {
-                headers: { 'User-Agent': USER_AGENT }
+                headers: { 'User-Agent': USER_AGENT },
+                timeout: 15000
             });
 
             const $ = cheerio.load(html);
             
-            // Extract basic info
-            const title = $('h1').first().text().trim() || 'Unknown Song';
-            const artist = $('.singer, .singer-name').text().trim() || 'Unknown Artist';
-            const album = $('.album, .album-name').text().trim();
-            const imageUrl = $('img.song-img, .album-art img').attr('src');
+            // Extract basic info - try multiple selectors
+            const title = $('h1').first().text().trim() || 
+                         $('h2.song-title').text().trim() || 
+                         $('.song-name').text().trim() || 
+                         'Unknown Song';
+            
+            const artist = $('.singer').text().trim() || 
+                          $('.singer-name').text().trim() || 
+                          $('.artist').text().trim() || 
+                          $('p:contains("Singer")').next().text().trim() || 
+                          'Unknown Artist';
+            
+            const album = $('.album').text().trim() || 
+                         $('.album-name').text().trim() || 
+                         $('p:contains("Album")').next().text().trim();
+            
+            // Try multiple selectors for image
+            let imageUrl = $('img.song-img').attr('src') || 
+                          $('.album-art img').attr('src') || 
+                          $('img[alt*="cover"]').attr('src') || 
+                          $('img[alt*="album"]').attr('src') ||
+                          $('.song-image img').attr('src') ||
+                          $('meta[property="og:image"]').attr('content') ||
+                          $('img').first().attr('src');
+
+            console.log(`[PagalfreeService] Extracted - Title: ${title}, Artist: ${artist}, Image: ${imageUrl}`);
 
             const downloadLinks: { quality: string; url: string; }[] = [];
 
             // Extract download buttons
-            $('a[href*="/dwload/"]').each((_, el) => {
+            $('a[href*="/dwload/"], a[href*="download"], a:contains("Download")').each((_, el) => {
                 const $el = $(el);
                 const href = $el.attr('href');
                 const text = $el.text().toLowerCase();
 
-                if (href) {
+                if (href && (href.includes('dwload') || href.includes('download'))) {
                     let quality = '128kbps'; // Default
                     if (text.includes('320')) quality = '320kbps';
                     else if (text.includes('128')) quality = '128kbps';
                     else if (text.includes('48')) quality = '48kbps';
+                    else if (text.includes('64')) quality = '64kbps';
 
                     downloadLinks.push({
                         quality,
@@ -108,11 +167,33 @@ export class PagalfreeService {
                 }
             });
 
+            console.log(`[PagalfreeService] Found ${downloadLinks.length} download links`);
+
+            // Clean and format the image URL
+            let finalImageUrl: string | undefined;
+            if (imageUrl) {
+                if (imageUrl.startsWith('http')) {
+                    finalImageUrl = imageUrl;
+                } else {
+                    // Ensure path starts with /
+                    const cleanPath = imageUrl.startsWith('/') ? imageUrl : '/' + imageUrl;
+                    finalImageUrl = `${PAGALFREE_BASE}${cleanPath}`;
+                }
+                // URL encode spaces and special characters in the path
+                try {
+                    const url = new URL(finalImageUrl);
+                    url.pathname = url.pathname.split('/').map(segment => encodeURIComponent(decodeURIComponent(segment))).join('/');
+                    finalImageUrl = url.toString();
+                } catch (e) {
+                    console.warn('[PagalfreeService] Failed to encode image URL:', e);
+                }
+            }
+
             return {
                 title,
                 artist,
                 album,
-                imageUrl: imageUrl ? (imageUrl.startsWith('http') ? imageUrl : `${PAGALFREE_BASE}${imageUrl}`) : undefined,
+                imageUrl: finalImageUrl,
                 downloadLinks
             };
         } catch (error) {

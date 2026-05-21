@@ -223,9 +223,10 @@ router.post('/auto-knot', upload.single('file'), async (req: Request, res: Respo
   try {
     const { song_title, duration_ms, sensitivity = 'balanced', youtube_id, stream_url } = req.body;
 
-    if (youtube_id) {
-      console.log(`[AutoKnot] Using Distributed Gateway (Fast) for YouTube ID: ${youtube_id}`);
-      const result = await DistributedGateway.analyzeYoutube(youtube_id, sensitivity, stream_url, 'fast');
+    if (youtube_id || stream_url) {
+      const targetId = youtube_id || 'stream_' + Math.random().toString(36).substring(7);
+      console.log(`[AutoKnot] Using Distributed Gateway (Fast) for: ${targetId}`);
+      const result = await DistributedGateway.analyzeYoutube(targetId, sensitivity, stream_url, 'fast');
       res.json({
         ...result,
         knot_count: result.junctions.length,
@@ -308,10 +309,11 @@ router.post('/auto-knot-pro', upload.single('file'), async (req: Request, res: R
   try {
     const { song_title, duration_ms, sensitivity = 'balanced', youtube_id, stream_url } = req.body;
 
-    if (youtube_id) {
-      console.log(`[AutoKnot] Pro: Using Distributed Gateway for YouTube ID: ${youtube_id}`);
+    if (youtube_id || stream_url) {
+      const targetId = youtube_id || 'stream_' + Math.random().toString(36).substring(7);
+      console.log(`[AutoKnot] Pro: Using Distributed Gateway for: ${targetId}`);
       // Now passing 'pro' to the gateway
-      const result = await DistributedGateway.analyzeYoutube(youtube_id, sensitivity, stream_url, 'pro');
+      const result = await DistributedGateway.analyzeYoutube(targetId, sensitivity, stream_url, 'pro');
       res.json({
         ...result,
         knot_count: result.junctions.length,
