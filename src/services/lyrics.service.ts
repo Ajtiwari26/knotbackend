@@ -155,7 +155,7 @@ export class LyricsService {
       transcriptData = await YoutubeTranscript.fetchTranscript(youtubeId);
       if (transcriptData && transcriptData.length > 0) {
         return transcriptData.map((t) => ({
-          timeMs: Math.round(t.offset * 1000),
+          timeMs: Math.round(t.offset),
           text: t.text.replace(/&amp;/g, '&').replace(/&quot;/g, '"').replace(/&#39;/g, "'"),
         }));
       }

@@ -262,14 +262,26 @@ export class JiosaavnService {
                 imageUrl = imageUrl.replace('150x150', '500x500').replace('50x50', '500x500');
             }
 
-            const durationSec = parseInt(song.duration) || 0;
+            let artist = 'Unknown Artist';
+            const primaryArtists = song.more_info?.artistMap?.primary_artists;
+            if (Array.isArray(primaryArtists) && primaryArtists.length > 0) {
+                artist = primaryArtists.map((a: any) => a.name).join(', ');
+            } else if (song.subtitle) {
+                artist = song.subtitle.split(' - ')[0].trim();
+            } else if (song.more_info?.singers) {
+                artist = song.more_info.singers;
+            } else if (song.more_info?.music) {
+                artist = song.more_info.music;
+            }
+
+            const durationSec = parseInt(song.more_info?.duration || song.duration) || 0;
 
             return {
                 id: song.id,
                 has_lyrics: song.more_info?.has_lyrics === 'true',
                 title: decodeHTMLEntities(song.title),
-                artist: decodeHTMLEntities(song.more_info?.singers || song.music || 'Unknown Artist'),
-                album: decodeHTMLEntities(song.album),
+                artist: decodeHTMLEntities(artist),
+                album: decodeHTMLEntities(song.more_info?.album || song.album),
                 imageUrl: imageUrl,
                 duration_ms: durationSec * 1000,
                 downloadLinks: getDownloadLinks(decryptedUrl)
