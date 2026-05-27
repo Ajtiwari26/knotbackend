@@ -189,7 +189,7 @@ export class JiosaavnService {
             console.log(`[JiosaavnService] Searching: ${searchUrl}`);
             const response = await axios.get(searchUrl, {
                 headers: getRotatedHeaders(query),
-                timeout: 10000
+                timeout: 2000
             });
 
             const data = response.data;
@@ -236,7 +236,7 @@ export class JiosaavnService {
             console.log(`[JiosaavnService] Metadata Fetching: ${token}`);
             const response = await axios.get(url, {
                 headers: getRotatedHeaders(token),
-                timeout: 10000
+                timeout: 2000
             });
 
             const song = response.data?.songs?.[0];

@@ -30,6 +30,7 @@ initializeFirebase();
 app.use('/api/auth', authRoutes);
 app.use('/api/users', userRoutes);
 app.use('/api/songs', songRoutes);
+app.use('/api/song', songRoutes);
 app.use('/api/knots', knotRoutes);
 app.use('/api/playlists', playlistRoutes);
 app.use('/api/config', configRoutes);

@@ -35,21 +35,17 @@ export class LyricsService {
       }
     }
 
-    // 2. JioSaavn Source
+    // 2. JioSaavn Source (ONLY if title or artist is missing)
     let resolvedTitle = title || '';
     let resolvedArtist = artist || '';
-    let jioPlainLyrics: string | null = null;
 
-    if (jiosaavn_token) {
+    if (jiosaavn_token && (!resolvedTitle || !resolvedArtist)) {
       try {
         console.log(`[LyricsService] Resolving JioSaavn metadata for token: ${jiosaavn_token}`);
         const metadata = await JiosaavnService.getSongMetadata(jiosaavn_token);
         if (metadata) {
-          resolvedTitle = metadata.title;
-          resolvedArtist = metadata.artist;
-          if (metadata.has_lyrics && metadata.id) {
-            jioPlainLyrics = await this.fetchJiosaavnPlainLyrics(metadata.id);
-          }
+          if (!resolvedTitle) resolvedTitle = metadata.title;
+          if (!resolvedArtist) resolvedArtist = metadata.artist;
         }
       } catch (e) {
         console.warn(`[LyricsService] JioSaavn metadata query failed:`, (e as Error).message);
@@ -94,9 +90,20 @@ export class LyricsService {
     }
 
     // 5. JioSaavn Plain Lyrics Fallback (Pseudo-Syncing)
-    if (jioPlainLyrics) {
-      console.log(`[LyricsService] Fallback: Pseudo-syncing JioSaavn plain lyrics`);
-      return this.pseudoSyncPlainLyrics(jioPlainLyrics, duration);
+    if (jiosaavn_token) {
+      try {
+        console.log(`[LyricsService] JioSaavn Fallback: Resolving plain lyrics for token: ${jiosaavn_token}`);
+        const metadata = await JiosaavnService.getSongMetadata(jiosaavn_token);
+        if (metadata && metadata.has_lyrics && metadata.id) {
+          const plain = await this.fetchJiosaavnPlainLyrics(metadata.id);
+          if (plain) {
+            console.log(`[LyricsService] Fallback: Pseudo-syncing JioSaavn plain lyrics`);
+            return this.pseudoSyncPlainLyrics(plain, duration);
+          }
+        }
+      } catch (e) {
+        console.warn(`[LyricsService] JioSaavn plain lyrics query failed:`, (e as Error).message);
+      }
     }
 
     // 6. LRCLIB Plain Lyrics Fallback (Pseudo-Syncing)
