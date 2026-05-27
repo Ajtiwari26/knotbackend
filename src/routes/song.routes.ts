@@ -10,6 +10,7 @@ import path from 'path';
 import { PagalworldService } from '../services/pagalworld.service';
 import { PagalfreeService } from '../services/pagalfree.service';
 import { JiosaavnService } from '../services/jiosaavn.service';
+import { LyricsService } from '../services/lyrics.service';
 import { streamPagalworld, streamPagalfree, streamJiosaavn } from '../controllers/stream.controller';
 
 
@@ -157,6 +158,30 @@ router.get('/jiosaavn/metadata', async (req: Request, res: Response): Promise<vo
  * JioSaavn audio proxy
  */
 router.get('/jiosaavn/stream', streamJiosaavn);
+
+/**
+ * Robust Synced Lyrics Resolver
+ */
+router.get('/lyrics', async (req: Request, res: Response): Promise<void> => {
+  try {
+    const { youtube_id, jiosaavn_token, title, artist, duration_ms } = req.query;
+    
+    console.log(`[Backend Lyrics] Requesting lyrics for: youtube_id=${youtube_id}, jiosaavn_token=${jiosaavn_token}, title=${title}, artist=${artist}`);
+    
+    const lyrics = await LyricsService.resolveLyrics({
+      youtube_id: youtube_id as string || undefined,
+      jiosaavn_token: jiosaavn_token as string || undefined,
+      title: title as string || undefined,
+      artist: artist as string || undefined,
+      duration_ms: duration_ms ? parseInt(duration_ms as string, 10) : undefined,
+    });
+    
+    res.json(lyrics);
+  } catch (error) {
+    console.error('[Backend Lyrics] Error resolving lyrics:', error);
+    res.status(500).json({ error: (error as Error).message });
+  }
+});
 
 
 /**

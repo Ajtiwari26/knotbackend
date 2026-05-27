@@ -3,11 +3,13 @@ import dotenv from 'dotenv';
 import cors from 'cors';
 import helmet from 'helmet';
 import { connectDB } from './config/db';
+import { initializeFirebase } from './config/firebase';
 import songRoutes from './routes/song.routes';
 import authRoutes from './routes/auth.routes';
 import knotRoutes from './routes/knot.routes';
 import playlistRoutes from './routes/playlist.routes';
 import userRoutes from './routes/user.routes';
+import configRoutes from './routes/config.routes';
 
 // Load env before anything else
 dotenv.config();
@@ -22,6 +24,7 @@ app.use(express.json());
 
 // Database Connection
 connectDB();
+initializeFirebase();
 
 // Routes
 app.use('/api/auth', authRoutes);
@@ -29,6 +32,7 @@ app.use('/api/users', userRoutes);
 app.use('/api/songs', songRoutes);
 app.use('/api/knots', knotRoutes);
 app.use('/api/playlists', playlistRoutes);
+app.use('/api/config', configRoutes);
 
 app.get('/health', (_req, res) => {
   res.status(200).json({ status: 'ok', timestamp: new Date().toISOString() });

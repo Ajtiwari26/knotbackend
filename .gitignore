@@ -3,3 +3,13 @@ dist/
 .env
 .DS_Store
 *.log
+firebase-service-account.json
+google-play-key.json
+
+# Temp debug files
+response.json
+saavn.json
+test-groq.ts
+
+# Logs
+logs/

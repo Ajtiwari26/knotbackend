@@ -122,6 +122,8 @@ export interface JiosaavnSong {
 }
 
 export interface JiosaavnMetadata {
+    id?: string;
+    has_lyrics?: boolean;
     title: string;
     artist: string;
     album?: string;
@@ -263,6 +265,8 @@ export class JiosaavnService {
             const durationSec = parseInt(song.duration) || 0;
 
             return {
+                id: song.id,
+                has_lyrics: song.more_info?.has_lyrics === 'true',
                 title: decodeHTMLEntities(song.title),
                 artist: decodeHTMLEntities(song.more_info?.singers || song.music || 'Unknown Artist'),
                 album: decodeHTMLEntities(song.album),

@@ -17,7 +17,7 @@ router.get('/me', protect, async (req: AuthRequest, res: Response): Promise<void
     }
     res.json({
       ...user.toObject(),
-      isGuest: user.email.endsWith('@knot.local'),
+      isGuest: user.email ? user.email.endsWith('@knot.local') : false,
     });
   } catch (error) {
     res.status(500).json({ error: (error as Error).message });
