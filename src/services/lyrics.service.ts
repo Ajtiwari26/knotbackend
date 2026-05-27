@@ -8,7 +8,87 @@ export interface LyricLine {
   text: string;
 }
 
+export interface LyricsResponse {
+  lyrics: LyricLine[];
+  language: string;
+  availableLanguages: { code: string; label: string }[];
+}
+
 export class LyricsService {
+  /**
+   * Helper to fetch available languages for a YouTube video.
+   */
+  public static async getYoutubeCaptionLanguages(youtubeId: string): Promise<{ code: string; label: string }[]> {
+    // 1. Try Innertube player API
+    try {
+      const resp = await axios.post(
+        'https://www.youtube.com/youtubei/v1/player?prettyPrint=false',
+        {
+          context: {
+            client: {
+              clientName: 'ANDROID',
+              clientVersion: '20.10.38',
+            },
+          },
+          videoId: youtubeId,
+        },
+        {
+          headers: {
+            'Content-Type': 'application/json',
+            'User-Agent': 'com.google.android.youtube/20.10.38 (Linux; U; Android 14)',
+          },
+          timeout: 4000,
+        }
+      );
+      const captionTracks = resp.data?.captions?.playerCaptionsTracklistRenderer?.captionTracks;
+      if (Array.isArray(captionTracks) && captionTracks.length > 0) {
+        return captionTracks.map((t: any) => ({
+          code: t.languageCode,
+          label: t.name?.runs?.[0]?.text || t.name?.simpleText || t.languageCode,
+        }));
+      }
+    } catch (e) {
+      // ignore
+    }
+
+    // 2. Fall back to watch page HTML scraping
+    try {
+      const res = await axios.get(`https://www.youtube.com/watch?v=${youtubeId}`, {
+        headers: {
+          'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_4) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/85.0.4183.83 Safari/537.36',
+        },
+        timeout: 4000,
+      });
+      const html = res.data;
+      const captionMatch = html.match(/"captionTracks":\[(.*?)\]/);
+      if (captionMatch) {
+        const tracks = JSON.parse(`[${captionMatch[1]}]`);
+        return tracks.map((t: any) => ({
+          code: t.languageCode,
+          label: t.name?.runs?.[0]?.text || t.name?.simpleText || t.languageCode,
+        }));
+      }
+    } catch (e) {
+      // ignore
+    }
+
+    // 3. Fall back to Piped API
+    try {
+      const res = await axios.get(`https://pipedapi.kavin.rocks/streams/${youtubeId}`, { timeout: 4000 });
+      const subtitles = res.data?.subtitles || [];
+      if (subtitles.length > 0) {
+        return subtitles.map((t: any) => ({
+          code: t.code,
+          label: t.name || t.code,
+        }));
+      }
+    } catch (e) {
+      // ignore
+    }
+
+    return [{ code: 'en', label: 'English' }];
+  }
+
   /**
    * Main resolver to get synced lyrics for a song.
    */
@@ -18,17 +98,24 @@ export class LyricsService {
     title?: string;
     artist?: string;
     duration_ms?: number;
-  }): Promise<LyricLine[]> {
-    const { youtube_id, jiosaavn_token, title, artist, duration_ms } = params;
+    lang?: string;
+  }): Promise<LyricsResponse> {
+    const { youtube_id, jiosaavn_token, title, artist, duration_ms, lang } = params;
     const duration = duration_ms || 180000; // default 3 min
+    const targetLang = lang || 'en';
 
     // 1. YouTube direct transcript check
     if (youtube_id) {
       try {
-        console.log(`[LyricsService] Resolving direct YouTube transcript for: ${youtube_id}`);
-        const ytLyrics = await this.fetchYoutubeTranscript(youtube_id);
-        if (ytLyrics && ytLyrics.length > 0) {
-          return ytLyrics;
+        console.log(`[LyricsService] Resolving direct YouTube transcript for: ${youtube_id} (lang: ${targetLang})`);
+        const ytLyricsResult = await this.fetchYoutubeTranscript(youtube_id, targetLang);
+        if (ytLyricsResult && ytLyricsResult.lyrics.length > 0) {
+          const availableLanguages = await this.getYoutubeCaptionLanguages(youtube_id);
+          return {
+            lyrics: ytLyricsResult.lyrics,
+            language: ytLyricsResult.language,
+            availableLanguages,
+          };
         }
       } catch (e) {
         console.warn(`[LyricsService] YouTube direct transcript fetch failed:`, (e as Error).message);
@@ -53,10 +140,8 @@ export class LyricsService {
     }
 
     // 3. YouTube Search Transcript Fallback (CRITICAL FOR BOLLYWOOD)
-    // Bollywood songs on YouTube (T-Series, YRF, Zee, etc.) almost always have Romanized Hindi/English transcripts.
     if (resolvedTitle) {
       try {
-        // Search query prioritizing lyrics
         const searchQuery = `${resolvedArtist} ${resolvedTitle} lyrics`.trim();
         console.log(`[LyricsService] Bollywood Fallback: Searching YouTube for lyrics transcript: "${searchQuery}"`);
         const searchResults = await searchYouTube(searchQuery, 3);
@@ -64,10 +149,15 @@ export class LyricsService {
         if (searchResults && searchResults.length > 0) {
           for (const result of searchResults) {
             console.log(`[LyricsService] Trying to extract transcript from fallback video: ${result.youtube_id} (${result.title})`);
-            const ytLyrics = await this.fetchYoutubeTranscript(result.youtube_id);
-            if (ytLyrics && ytLyrics.length > 0) {
+            const ytLyricsResult = await this.fetchYoutubeTranscript(result.youtube_id, targetLang);
+            if (ytLyricsResult && ytLyricsResult.lyrics.length > 0) {
               console.log(`[LyricsService] Successfully resolved synced lyrics from YouTube video fallback: ${result.youtube_id}`);
-              return ytLyrics;
+              const availableLanguages = await this.getYoutubeCaptionLanguages(result.youtube_id);
+              return {
+                lyrics: ytLyricsResult.lyrics,
+                language: ytLyricsResult.language,
+                availableLanguages,
+              };
             }
           }
         }
@@ -82,7 +172,11 @@ export class LyricsService {
         console.log(`[LyricsService] Querying LRCLIB for synced lyrics: ${resolvedArtist} - ${resolvedTitle}`);
         const synced = await this.fetchLrcLibSynced(resolvedTitle, resolvedArtist, duration);
         if (synced && synced.length > 0) {
-          return synced;
+          return {
+            lyrics: synced,
+            language: 'original',
+            availableLanguages: [{ code: 'original', label: 'Original' }],
+          };
         }
       } catch (e) {
         console.warn(`[LyricsService] LRCLIB synced search failed:`, (e as Error).message);
@@ -98,7 +192,11 @@ export class LyricsService {
           const plain = await this.fetchJiosaavnPlainLyrics(metadata.id);
           if (plain) {
             console.log(`[LyricsService] Fallback: Pseudo-syncing JioSaavn plain lyrics`);
-            return this.pseudoSyncPlainLyrics(plain, duration);
+            return {
+              lyrics: this.pseudoSyncPlainLyrics(plain, duration),
+              language: 'original',
+              availableLanguages: [{ code: 'original', label: 'Original' }],
+            };
           }
         }
       } catch (e) {
@@ -113,14 +211,18 @@ export class LyricsService {
         const plain = await this.fetchLrcLibPlain(resolvedTitle, resolvedArtist, duration);
         if (plain) {
           console.log(`[LyricsService] Fallback: Pseudo-syncing LRCLIB plain lyrics`);
-          return this.pseudoSyncPlainLyrics(plain, duration);
+          return {
+            lyrics: this.pseudoSyncPlainLyrics(plain, duration),
+            language: 'original',
+            availableLanguages: [{ code: 'original', label: 'Original' }],
+          };
         }
       } catch (e) {
         console.warn(`[LyricsService] LRCLIB plain query failed:`, (e as Error).message);
       }
     }
 
-    // 7. Last Resort: Search YouTube without 'lyrics' keyword (e.g. official music video captions)
+    // 7. Last Resort: Search YouTube without 'lyrics' keyword
     if (resolvedTitle) {
       try {
         const searchQuery = `${resolvedArtist} ${resolvedTitle}`.trim();
@@ -129,10 +231,15 @@ export class LyricsService {
         
         if (searchResults && searchResults.length > 0) {
           for (const result of searchResults) {
-            const ytLyrics = await this.fetchYoutubeTranscript(result.youtube_id);
-            if (ytLyrics && ytLyrics.length > 0) {
+            const ytLyricsResult = await this.fetchYoutubeTranscript(result.youtube_id, targetLang);
+            if (ytLyricsResult && ytLyricsResult.lyrics.length > 0) {
               console.log(`[LyricsService] Successfully resolved synced lyrics from official YouTube video: ${result.youtube_id}`);
-              return ytLyrics;
+              const availableLanguages = await this.getYoutubeCaptionLanguages(result.youtube_id);
+              return {
+                lyrics: ytLyricsResult.lyrics,
+                language: ytLyricsResult.language,
+                availableLanguages,
+              };
             }
           }
         }
@@ -141,38 +248,71 @@ export class LyricsService {
       }
     }
 
-    return [];
+    return {
+      lyrics: [],
+      language: 'none',
+      availableLanguages: [],
+    };
   }
 
   /**
    * Fetches YouTube transcript and parses it to LyricLine array.
    */
-  private static async fetchYoutubeTranscript(youtubeId: string): Promise<LyricLine[]> {
+  private static async fetchYoutubeTranscript(youtubeId: string, targetLang?: string): Promise<{ lyrics: LyricLine[]; language: string } | null> {
     let transcriptData: any[] = [];
+    const lang = targetLang || 'en';
 
     // Method 1: youtube-transcript library
     try {
-      transcriptData = await YoutubeTranscript.fetchTranscript(youtubeId);
+      transcriptData = await YoutubeTranscript.fetchTranscript(youtubeId, { lang });
       if (transcriptData && transcriptData.length > 0) {
-        return transcriptData.map((t) => ({
-          timeMs: Math.round(t.offset),
-          text: t.text.replace(/&amp;/g, '&').replace(/&quot;/g, '"').replace(/&#39;/g, "'"),
-        }));
+        return {
+          lyrics: transcriptData.map((t) => ({
+            timeMs: Math.round(t.offset),
+            text: t.text.replace(/&amp;/g, '&').replace(/&quot;/g, '"').replace(/&#39;/g, "'"),
+          })),
+          language: lang,
+        };
       }
     } catch (e) {
-      console.warn(`[LyricsService] YoutubeTranscript library failed for ${youtubeId}:`, (e as Error).message);
+      console.warn(`[LyricsService] YoutubeTranscript library failed for ${youtubeId} with lang ${lang}:`, (e as Error).message);
+      if (targetLang) {
+        try {
+          transcriptData = await YoutubeTranscript.fetchTranscript(youtubeId);
+          if (transcriptData && transcriptData.length > 0) {
+            return {
+              lyrics: transcriptData.map((t) => ({
+                timeMs: Math.round(t.offset),
+                text: t.text.replace(/&amp;/g, '&').replace(/&quot;/g, '"').replace(/&#39;/g, "'"),
+              })),
+              language: transcriptData[0].lang || 'unknown',
+            };
+          }
+        } catch (err) {
+          console.warn(`[LyricsService] YoutubeTranscript library fallback failed for ${youtubeId}:`, (err as Error).message);
+        }
+      }
     }
 
     // Method 2: Piped API
     try {
       const res = await axios.get(`https://pipedapi.kavin.rocks/streams/${youtubeId}`, { timeout: 5000 });
       const subtitles = res.data?.subtitles || [];
-      const track = subtitles.find((t: any) => t.code === 'en' || t.autoGenerated) || subtitles[0];
-      if (track?.url) {
-        const transcriptRes = await axios.get(track.url, { timeout: 5000 });
-        const vttText = transcriptRes.data;
-        const parsed = this.parseVtt(vttText);
-        if (parsed.length > 0) return parsed;
+      if (subtitles.length > 0) {
+        const track = subtitles.find((t: any) => t.code === lang) ||
+                      subtitles.find((t: any) => t.code === 'en') ||
+                      subtitles.find((t: any) => t.autoGenerated) ||
+                      subtitles[0];
+        if (track?.url) {
+          const transcriptRes = await axios.get(track.url, { timeout: 5000 });
+          const parsed = this.parseVtt(transcriptRes.data);
+          if (parsed.length > 0) {
+            return {
+              lyrics: parsed,
+              language: track.code || 'unknown',
+            };
+          }
+        }
       }
     } catch (e) {
       console.warn(`[LyricsService] Piped API transcript failed for ${youtubeId}:`, (e as Error).message);
@@ -180,16 +320,21 @@ export class LyricsService {
 
     // Method 3: Invidious API
     try {
-      const res = await axios.get(`https://invidious.jing.rocks/api/v1/captions/${youtubeId}?label=English`, { timeout: 5000 });
+      const res = await axios.get(`https://invidious.jing.rocks/api/v1/captions/${youtubeId}`, { timeout: 5000 });
       if (res.data?.captions && res.data.captions.length > 0) {
-        const track = res.data.captions.find((t: any) => t.label.includes('English')) || res.data.captions[0];
+        const track = res.data.captions.find((t: any) => t.language_code === lang) ||
+                      res.data.captions.find((t: any) => t.language_code === 'en') ||
+                      res.data.captions[0];
         if (track?.url) {
           const transcriptRes = await axios.get(track.url, { timeout: 5000 });
           if (transcriptRes.data?.lines) {
-            return transcriptRes.data.lines.map((l: any) => ({
-              timeMs: Math.round(l.start_ms),
-              text: l.text,
-            }));
+            return {
+              lyrics: transcriptRes.data.lines.map((l: any) => ({
+                timeMs: Math.round(l.start_ms),
+                text: l.text,
+              })),
+              language: track.language_code || 'unknown',
+            };
           }
         }
       }
@@ -204,22 +349,27 @@ export class LyricsService {
       const captionMatch = html.match(/"captionTracks":\[(.*?)\]/);
       if (captionMatch) {
         const tracks = JSON.parse(`[${captionMatch[1]}]`);
-        const track = tracks.find((t: any) => t.languageCode === 'en') || tracks[0];
+        const track = tracks.find((t: any) => t.languageCode === lang) ||
+                      tracks.find((t: any) => t.languageCode === 'en') ||
+                      tracks[0];
         if (track?.baseUrl) {
           const transcriptRes = await axios.get(track.baseUrl, { timeout: 5000 });
           const xmlText = transcriptRes.data;
           const textMatches = xmlText.matchAll(/<text start="([\d.]+)"[^>]*>(.*?)<\/text>/g);
-          return Array.from(textMatches).map((m: any) => ({
-            timeMs: Math.round(parseFloat(m[1]) * 1000),
-            text: m[2].replace(/&amp;/g, '&').replace(/&quot;/g, '"').replace(/&#39;/g, "'"),
-          }));
+          return {
+            lyrics: Array.from(textMatches).map((m: any) => ({
+              timeMs: Math.round(parseFloat(m[1]) * 1000),
+              text: m[2].replace(/&amp;/g, '&').replace(/&quot;/g, '"').replace(/&#39;/g, "'"),
+            })),
+            language: track.languageCode || 'unknown',
+          };
         }
       }
     } catch (e) {
       console.warn(`[LyricsService] Innertube scraper failed for ${youtubeId}:`, (e as Error).message);
     }
 
-    return [];
+    return null;
   }
 
   /**

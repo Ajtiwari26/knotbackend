@@ -164,9 +164,9 @@ router.get('/jiosaavn/stream', streamJiosaavn);
  */
 router.get('/lyrics', async (req: Request, res: Response): Promise<void> => {
   try {
-    const { youtube_id, jiosaavn_token, title, artist, duration_ms } = req.query;
+    const { youtube_id, jiosaavn_token, title, artist, duration_ms, lang } = req.query;
     
-    console.log(`[Backend Lyrics] Requesting lyrics for: youtube_id=${youtube_id}, jiosaavn_token=${jiosaavn_token}, title=${title}, artist=${artist}`);
+    console.log(`[Backend Lyrics] Requesting lyrics for: youtube_id=${youtube_id}, jiosaavn_token=${jiosaavn_token}, title=${title}, artist=${artist}, lang=${lang}`);
     
     const lyrics = await LyricsService.resolveLyrics({
       youtube_id: youtube_id as string || undefined,
@@ -174,6 +174,7 @@ router.get('/lyrics', async (req: Request, res: Response): Promise<void> => {
       title: title as string || undefined,
       artist: artist as string || undefined,
       duration_ms: duration_ms ? parseInt(duration_ms as string, 10) : undefined,
+      lang: lang as string || undefined,
     });
     
     res.json(lyrics);

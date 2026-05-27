@@ -35,6 +35,156 @@ app.use('/api/knots', knotRoutes);
 app.use('/api/playlists', playlistRoutes);
 app.use('/api/config', configRoutes);
 
+app.get('/delete-account', (_req, res) => {
+  res.send(`<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Delete Account - Knot App</title>
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;600;700&display=swap" rel="stylesheet">
+    <style>
+        :root {
+            --bg-color: #0A0A0A;
+            --surface-color: #121212;
+            --primary-color: #FF6D00;
+            --text-color: #FFFFFF;
+            --text-secondary: #A0A0A0;
+            --border-color: rgba(255, 255, 255, 0.08);
+        }
+        body {
+            background-color: var(--bg-color);
+            color: var(--text-color);
+            font-family: 'Outfit', sans-serif;
+            margin: 0;
+            padding: 0;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            min-height: 100vh;
+        }
+        .container {
+            max-width: 550px;
+            width: 100%;
+            padding: 40px;
+            box-sizing: border-box;
+            background-color: var(--surface-color);
+            border-radius: 20px;
+            border: 1px solid var(--border-color);
+            box-shadow: 0 10px 30px rgba(0, 0, 0, 0.5);
+            margin: 20px;
+        }
+        .logo {
+            font-size: 32px;
+            font-weight: 700;
+            color: var(--primary-color);
+            margin-bottom: 24px;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+        .logo span {
+            color: var(--text-color);
+        }
+        h1 {
+            font-size: 24px;
+            font-weight: 600;
+            margin-top: 0;
+            margin-bottom: 12px;
+        }
+        p {
+            font-size: 15px;
+            line-height: 1.6;
+            color: var(--text-secondary);
+            margin-bottom: 24px;
+        }
+        .card {
+            background-color: rgba(255, 255, 255, 0.03);
+            border: 1px solid var(--border-color);
+            border-radius: 12px;
+            padding: 20px;
+            margin-bottom: 24px;
+        }
+        .card h2 {
+            font-size: 16px;
+            font-weight: 600;
+            margin-top: 0;
+            margin-bottom: 12px;
+            color: var(--primary-color);
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+        .step-list {
+            margin: 0;
+            padding-left: 20px;
+            color: var(--text-secondary);
+            font-size: 14px;
+        }
+        .step-list li {
+            margin-bottom: 8px;
+            line-height: 1.5;
+        }
+        .btn-submit {
+            display: block;
+            width: 100%;
+            padding: 14px;
+            background-color: var(--primary-color);
+            color: white;
+            border: none;
+            border-radius: 10px;
+            font-size: 16px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: opacity 0.2s ease;
+            text-align: center;
+            text-decoration: none;
+            box-sizing: border-box;
+        }
+        .btn-submit:hover {
+            opacity: 0.9;
+        }
+        .footer {
+            text-align: center;
+            font-size: 12px;
+            color: rgba(255, 255, 255, 0.3);
+            margin-top: 30px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="logo">🪢 <span>Knot</span></div>
+        <h1>Account & Data Deletion Request</h1>
+        <p>If you no longer wish to use Knot and want your personal information and account data deleted, please follow the steps below.</p>
+        
+        <div class="card">
+            <h2>Steps to Request Account Deletion</h2>
+            <ol class="step-list">
+                <li><strong>In-App Deletion (Recommended)</strong>: Open the Knot app, go to Settings, tap <strong>Delete Account</strong>, and confirm your request. This will queue your account for immediate deletion.</li>
+                <li><strong>Email Request</strong>: Send an email to our support team at <a href="mailto:ajay@knotmusic.app" style="color: var(--primary-color); text-decoration: none;">ajay@knotmusic.app</a> with the subject line <strong>"Knot Account Deletion Request"</strong>. Please include the email address or phone number associated with your account.</li>
+            </ol>
+        </div>
+
+        <div class="card">
+            <h2>Data Handling Policy</h2>
+            <ul class="step-list">
+                <li><strong>Data Deleted</strong>: Upon approval, we delete all your user profile data, Firebase Auth credentials, saved liked songs, and custom loops/audio marker configurations (Knots).</li>
+                <li><strong>Data Kept</strong>: We retain anonymous, aggregated play count statistics for trending metrics, which cannot be linked back to your identity.</li>
+                <li><strong>Retention Period</strong>: Account deletion requests submitted in-app or via email are processed within <strong>48 hours</strong>. Once deleted, your custom loop marks and personal configurations cannot be recovered.</li>
+            </ul>
+        </div>
+
+        <a href="mailto:ajay@knotmusic.app?subject=Knot%20Account%20Deletion%20Request" class="btn-submit">Request Account Deletion via Email</a>
+        
+        <div class="footer">
+            &copy; 2026 Knot Music. All rights reserved.
+        </div>
+    </div>
+</body>
+</html>`);
+});
+
 app.get('/health', (_req, res) => {
   res.status(200).json({ status: 'ok', timestamp: new Date().toISOString() });
 });
