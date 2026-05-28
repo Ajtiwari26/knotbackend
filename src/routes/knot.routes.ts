@@ -1,11 +1,14 @@
 import { Router, Request, Response } from 'express';
 import multer from 'multer';
 import fs from 'fs';
+import { exec } from 'child_process';
+import util from 'util';
 import KnotVersion from '../models/KnotVersion';
 import { protect, AuthRequest } from '../middleware/auth';
 import { DistributedGateway } from '../services/distributed-gateway.service';
 import { GroqService } from '../services/groq.service';
 
+const execPromise = util.promisify(exec);
 const upload = multer({ dest: 'uploads/' });
 
 const router = Router();
@@ -258,49 +261,29 @@ router.post('/auto-knot', upload.single('file'), async (req: Request, res: Respo
     const healthyEngines = await DistributedGateway.getAvailableEngines();
     const targetEngineUrl = healthyEngines[Math.floor(Math.random() * healthyEngines.length)] || AUTO_KNOT_ENGINE_URLS[0];
     
-    console.log(`[AutoKnot] Proxying to: ${targetEngineUrl}/analyze`);
-
-    // Read the uploaded file into a Blob
-    const fileBuffer = await fs.promises.readFile(req.file.path);
-    const fileBlob = new Blob([fileBuffer], { type: req.file.mimetype || 'audio/mpeg' });
-
-    // Create FormData for the Render API
-    const formData = new FormData();
-    formData.append('file', fileBlob, req.file.originalname || 'audio.m4a');
-    formData.append('sensitivity', sensitivity);
-    formData.append('engine', 'fast');
-    
-    // Pass the original device URI if needed
-    if (req.body.song_uri) formData.append('device_uri', req.body.song_uri);
+    console.log(`[AutoKnot] Proxying to: ${targetEngineUrl}/analyze using curl`);
 
     const startTime = Date.now();
-    // Increase timeout to 10 minutes for Render DSP engine
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 600000);
-
-    const response = await fetch(`${targetEngineUrl}/analyze`, {
-      method: 'POST',
-      body: formData,
-      signal: controller.signal,
-    });
     
-    clearTimeout(timeoutId);
+    // Execute curl to perform robust file transfer
+    const { stdout } = await execPromise(
+      `curl -s --max-time 600 -X POST -F "file=@${req.file.path}" -F "sensitivity=${sensitivity}" -F "engine=fast" ${targetEngineUrl}/analyze`
+    );
 
     const elapsed = Date.now() - startTime;
-    console.log(`[AutoKnot] Engine response received in ${elapsed}ms: ${response.status}`);
+    console.log(`[AutoKnot] Engine response received in ${elapsed}ms`);
 
     // Clean up temporary file
     await fs.promises.unlink(req.file.path).catch(console.error);
 
-    if (!response.ok) {
-      const errorText = await response.text();
-      console.error(`[AutoKnot] Engine error: ${errorText}`);
-      res.status(response.status).json({ error: `Engine error: ${errorText}` });
+    const result = JSON.parse(stdout);
+    if (result.error) {
+      console.error(`[AutoKnot] Engine error: ${result.error}`);
+      res.status(500).json({ error: `Engine error: ${result.error}` });
       return;
     }
 
-    const result = await response.json();
-    console.log(`[AutoKnot] Fast analysis complete: ${result.knot_count} knots`);
+    console.log(`[AutoKnot] Fast analysis complete: ${result.knot_count || result.junctions?.length || 0} knots`);
     res.json(result);
   } catch (error) {
     console.error('[AutoKnot] Fast analysis failed:', error);
@@ -339,52 +322,34 @@ router.post('/auto-knot-pro', upload.single('file'), async (req: Request, res: R
       return;
     }
 
-    console.log(`[AutoKnot] Pro analysis requested for: ${song_title}`);
-
-    // Read the uploaded file into a Blob
-    const fileBuffer = await fs.promises.readFile(req.file.path);
-    const fileBlob = new Blob([fileBuffer], { type: req.file.mimetype || 'audio/mpeg' });
-
-    const formData = new FormData();
-    formData.append('file', fileBlob, req.file.originalname || 'audio.m4a');
-    formData.append('filename', song_title);
-    formData.append('sensitivity', sensitivity);
-    formData.append('engine', 'pro');
-
     // Check if Modal Pro URL is configured
     if (!MODAL_PRO_URL) {
       res.status(503).json({ error: 'Modal Pro engine not configured. Please set MODAL_PRO_URL environment variable.' });
       return;
     }
 
-    // Increase timeout to 10 minutes for Modal GPU engine
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 600000);
+    console.log(`[AutoKnot] Proxying Pro upload to: ${MODAL_PRO_URL} using curl`);
+    const startTime = Date.now();
 
-    console.log(`[AutoKnot] Proxying Pro upload to: ${MODAL_PRO_URL}`);
-    const response = await fetch(MODAL_PRO_URL, {
-      method: 'POST',
-      body: formData,
-      signal: controller.signal,
-    });
-    
-    clearTimeout(timeoutId);
+    // Execute curl to perform robust file transfer
+    const { stdout } = await execPromise(
+      `curl -s --max-time 600 -X POST -F "file=@${req.file.path}" -F "filename=${song_title}" -F "sensitivity=${sensitivity}" -F "engine=pro" ${MODAL_PRO_URL}`
+    );
 
-    const elapsed = (Date.now() - (req as any)._startTime || Date.now()) / 1000;
-    console.log(`[AutoKnot] Pro engine response: ${response.status}`);
+    const elapsed = Date.now() - startTime;
+    console.log(`[AutoKnot] Pro engine response received in ${elapsed}ms`);
 
     // Clean up temporary file
     await fs.promises.unlink(req.file.path).catch(console.error);
 
-    if (!response.ok) {
-      const errorText = await response.text();
-      console.error(`[AutoKnot] Pro engine error: ${errorText}`);
-      res.status(response.status).json({ error: `Pro engine error: ${errorText}` });
+    const result = JSON.parse(stdout);
+    if (result.error) {
+      console.error(`[AutoKnot] Pro engine error: ${result.error}`);
+      res.status(500).json({ error: `Pro engine error: ${result.error}` });
       return;
     }
 
-    const result = await response.json();
-    console.log(`[AutoKnot] Pro analysis complete: ${result.knot_count} knots`);
+    console.log(`[AutoKnot] Pro analysis complete: ${result.knot_count || result.junctions?.length || 0} knots`);
     res.json(result);
   } catch (error) {
     console.error('[AutoKnot] Pro analysis failed:', error);
