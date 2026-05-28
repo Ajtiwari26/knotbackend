@@ -200,8 +200,18 @@ router.delete('/:id', protect, async (req: AuthRequest, res: Response): Promise<
 // AUTO-KNOTTING ENGINE — Three-Tier Proxy Routes
 // ══════════════════════════════════════════════════════════════
 
+// Default Render auto-knotting engine URLs in case environment variables are not set in production
+const DEFAULT_AUTO_KNOT_ENGINE_URLS = [
+  'https://autoknotengine.onrender.com',
+  'https://autoknottingengine2.onrender.com',
+  'https://auto-knotting-engine3nukkadfoods.onrender.com',
+  'https://auto-knotting-engine4cryptowealth.onrender.com',
+  'https://auto-knotting-engine5guesser.onrender.com',
+  'https://auto-knotting-engine6fundedaccount.onrender.com'
+];
+
 // Six auto-knotting engines for distributed processing of long songs
-const AUTO_KNOT_ENGINE_URLS = [
+const REMOTE_ENV_URLS = [
   process.env.AUTO_KNOT_ENGINE_URL_1,
   process.env.AUTO_KNOT_ENGINE_URL_2,
   process.env.AUTO_KNOT_ENGINE_URL_3,
@@ -209,6 +219,8 @@ const AUTO_KNOT_ENGINE_URLS = [
   process.env.AUTO_KNOT_ENGINE_URL_5,
   process.env.AUTO_KNOT_ENGINE_URL_6
 ].filter(url => url); // Filter out any undefined/empty URLs
+
+const AUTO_KNOT_ENGINE_URLS = REMOTE_ENV_URLS.length > 0 ? REMOTE_ENV_URLS : DEFAULT_AUTO_KNOT_ENGINE_URLS;
 
 const MODAL_PRO_URL = process.env.MODAL_PRO_URL || '';
 

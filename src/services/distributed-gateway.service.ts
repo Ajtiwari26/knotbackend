@@ -16,6 +16,18 @@ const REMOTE_ENGINE_URLS = [
   process.env.AUTO_KNOT_ENGINE_URL_6
 ].filter((url): url is string => !!url); // Filter out any undefined/empty URLs
 
+// Default Render auto-knotting engine URLs in case environment variables are not set in production
+const DEFAULT_AUTO_KNOT_ENGINE_URLS = [
+  'https://autoknotengine.onrender.com',
+  'https://autoknottingengine2.onrender.com',
+  'https://auto-knotting-engine3nukkadfoods.onrender.com',
+  'https://auto-knotting-engine4cryptowealth.onrender.com',
+  'https://auto-knotting-engine5guesser.onrender.com',
+  'https://auto-knotting-engine6fundedaccount.onrender.com'
+];
+
+const ENGINES_TO_USE = REMOTE_ENGINE_URLS.length > 0 ? REMOTE_ENGINE_URLS : DEFAULT_AUTO_KNOT_ENGINE_URLS;
+
 // Local engine ports (for testing)
 const LOCAL_ENGINE_PORTS = [5001, 5002, 5003];
 
@@ -23,7 +35,7 @@ const LOCAL_ENGINE_PORTS = [5001, 5002, 5003];
 const USE_LOCAL_ENGINES = process.env.USE_LOCAL_ENGINES === 'true';
 const ALL_ENGINE_ENDPOINTS = USE_LOCAL_ENGINES 
   ? LOCAL_ENGINE_PORTS.map(port => `http://localhost:${port}`)
-  : REMOTE_ENGINE_URLS;
+  : ENGINES_TO_USE;
 
 const OVERLAP_SEC = 15;
 const HEALTH_CHECK_TIMEOUT = 5000; // 5 seconds
