@@ -162,7 +162,7 @@ app.get('/delete-account', (_req, res) => {
             <h2>Steps to Request Account Deletion</h2>
             <ol class="step-list">
                 <li><strong>In-App Deletion (Recommended)</strong>: Open the Knot app, go to Settings, tap <strong>Delete Account</strong>, and confirm your request. This will queue your account for immediate deletion.</li>
-                <li><strong>Email Request</strong>: Send an email to our support team at <a href="mailto:ajay@knotmusic.app" style="color: var(--primary-color); text-decoration: none;">ajay@knotmusic.app</a> with the subject line <strong>"Knot Account Deletion Request"</strong>. Please include the email address or phone number associated with your account.</li>
+                <li><strong>Email Request</strong>: Send an email to our support team at <a href="mailto:ajt261999@gmail.com" style="color: var(--primary-color); text-decoration: none;">ajt261999@gmail.com</a> with the subject line <strong>"Knot Account Deletion Request"</strong>. Please include the email address or phone number associated with your account.</li>
             </ol>
         </div>
 
@@ -175,7 +175,7 @@ app.get('/delete-account', (_req, res) => {
             </ul>
         </div>
 
-        <a href="mailto:ajay@knotmusic.app?subject=Knot%20Account%20Deletion%20Request" class="btn-submit">Request Account Deletion via Email</a>
+        <a href="mailto:ajt261999@gmail.com?subject=Knot%20Account%20Deletion%20Request" class="btn-submit">Request Account Deletion via Email</a>
         
         <div class="footer">
             &copy; 2026 Knot Music. All rights reserved.
@@ -331,7 +331,7 @@ const privacyHtml = `<!DOCTYPE html>
         <ul>
             <li>Directly in the app under Settings &gt; Delete Account.</li>
             <li>By visiting our web portal at <a href="/delete-account">Account Deletion Request</a>.</li>
-            <li>By emailing our privacy team at <a href="mailto:ajay@knotmusic.app">ajay@knotmusic.app</a>.</li>
+            <li>By emailing our privacy team at <a href="mailto:ajt261999@gmail.com">ajt261999@gmail.com</a>.</li>
         </ul>
 
         <h2>5. Security</h2>
@@ -340,7 +340,7 @@ const privacyHtml = `<!DOCTYPE html>
         <div class="contact-box">
             <h3>Contact Us</h3>
             <p>If you have any questions about this Privacy Policy or our data collection practices, please contact us at:</p>
-            <p>Email: <a href="mailto:ajay@knotmusic.app">ajay@knotmusic.app</a></p>
+            <p>Email: <a href="mailto:ajt261999@gmail.com">ajt261999@gmail.com</a></p>
         </div>
 
         <div class="footer">
