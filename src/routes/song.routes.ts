@@ -3,6 +3,7 @@ import { getSongMetadata, enqueueDownload, syncLocalKnot, getLocalKnot } from '.
 import Song from '../models/Song';
 import mongoose from 'mongoose';
 import { GridFSBucket, ObjectId } from 'mongodb';
+import { storageDBConnection } from '../config/db';
 import { searchYouTube, getVideoDetails, getStreamUrl } from '../services/youtube.service';
 import { exec, spawn } from 'child_process';
 import fs from 'fs';
@@ -485,11 +486,12 @@ router.get('/:id/details', async (req: Request, res: Response): Promise<void> =>
 
 router.get('/downloads/:gridfs_id', async (req: Request, res: Response): Promise<void> => {
   try {
-    if (!mongoose.connection.db) {
+    const dbInstance = (storageDBConnection && storageDBConnection.db) ? storageDBConnection.db : mongoose.connection.db;
+    if (!dbInstance) {
       res.status(500).json({ error: 'DB not connected' });
       return;
     }
-    const bucket = new GridFSBucket(mongoose.connection.db, { bucketName: 'audio_buffers' });
+    const bucket = new GridFSBucket(dbInstance, { bucketName: 'audio_buffers' });
     const downloadStream = bucket.openDownloadStream(new ObjectId(req.params.gridfs_id as string));
     res.set('Content-Type', 'application/octet-stream');
     downloadStream.pipe(res);

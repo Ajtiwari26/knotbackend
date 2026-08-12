@@ -8,6 +8,7 @@ import * as admin from 'firebase-admin';
 import { initializeFirebase } from '../config/firebase';
 import Otp from '../models/Otp';
 import { sendOTPSMS } from '../services/sms.service';
+import { migrateGuestData } from '../services/guestMigration.service';
 
 const router = Router();
 
@@ -22,7 +23,7 @@ const generateToken = (id: string) => {
  */
 router.post('/register', async (req: Request, res: Response): Promise<void> => {
   try {
-    const { email, password, displayName } = req.body;
+    const { email, password, displayName, guestUserId } = req.body;
 
     if (!email || !password || !displayName) {
       res.status(400).json({ error: 'All fields are required' });
@@ -44,6 +45,10 @@ router.post('/register', async (req: Request, res: Response): Promise<void> => {
       displayName,
     });
 
+    if (guestUserId && guestUserId !== user._id.toString()) {
+      await migrateGuestData(guestUserId, user._id.toString());
+    }
+
     res.status(201).json({
       _id: user._id,
       displayName: user.displayName,
@@ -61,10 +66,14 @@ router.post('/register', async (req: Request, res: Response): Promise<void> => {
  */
 router.post('/login', async (req: Request, res: Response): Promise<void> => {
   try {
-    const { email, password } = req.body;
+    const { email, password, guestUserId } = req.body;
     const user = await User.findOne({ email }).select('+password');
 
     if (user && (await bcrypt.compare(password, user.password as string))) {
+      if (guestUserId && guestUserId !== user._id.toString()) {
+        await migrateGuestData(guestUserId, user._id.toString());
+      }
+
       res.json({
         _id: user._id,
         displayName: user.displayName,
@@ -164,7 +173,7 @@ router.post('/phone/send-otp', async (req: Request, res: Response): Promise<void
  */
 router.post('/phone/verify-otp', async (req: Request, res: Response): Promise<void> => {
   try {
-    const { phoneNumber, otp } = req.body;
+    const { phoneNumber, otp, guestUserId } = req.body;
     if (!phoneNumber || !otp) {
       res.status(400).json({ error: 'phoneNumber and otp are required' });
       return;
@@ -191,6 +200,10 @@ router.post('/phone/verify-otp', async (req: Request, res: Response): Promise<vo
       console.log(`Registered new user via SMS Gateway Hub OTP: ${user._id}`);
     }
 
+    if (guestUserId && guestUserId !== user._id.toString()) {
+      await migrateGuestData(guestUserId, user._id.toString());
+    }
+
     res.status(200).json({
       _id: user._id,
       displayName: user.displayName,
@@ -212,7 +225,7 @@ router.post('/phone/verify-otp', async (req: Request, res: Response): Promise<vo
  */
 router.post('/firebase', async (req: Request, res: Response): Promise<void> => {
   try {
-    const { idToken } = req.body;
+    const { idToken, guestUserId } = req.body;
 
     if (!idToken) {
       res.status(400).json({ error: 'idToken is required' });
@@ -257,6 +270,10 @@ router.post('/firebase', async (req: Request, res: Response): Promise<void> => {
       }
     }
 
+    if (guestUserId && guestUserId !== user._id.toString()) {
+      await migrateGuestData(guestUserId, user._id.toString());
+    }
+
     res.status(200).json({
       _id: user._id,
       displayName: user.displayName,
@@ -297,4 +314,60 @@ router.get('/me', protect, async (req: AuthRequest, res: Response): Promise<void
   }
 });
 
+/**
+ * Register or login persistent Guest user (linked to browser deviceId)
+ */
+router.post('/guest', async (req: Request, res: Response): Promise<void> => {
+  try {
+    const { deviceId } = req.body;
+    const cleanDeviceId = (deviceId && typeof deviceId === 'string')
+      ? deviceId.replace(/[^a-zA-Z0-9_-]/g, '')
+      : `browser_${Date.now()}`;
+
+    const guestEmail = `guest_${cleanDeviceId}@knot.local`;
+
+    let user = await User.findOne({ email: guestEmail });
+
+    if (!user) {
+      user = await User.create({
+        displayName: 'Guest User',
+        email: guestEmail,
+        avatar: '',
+        wallet_balance: 0,
+      });
+      console.log(`Created persistent MongoDB Guest User: ${user._id} (${guestEmail})`);
+    }
+
+    res.status(200).json({
+      _id: user._id,
+      displayName: user.displayName,
+      email: user.email,
+      avatar: user.avatar,
+      bio: user.bio,
+      isGuest: true,
+      token: generateToken(user._id.toString()),
+    });
+  } catch (error) {
+    res.status(500).json({ error: (error as Error).message });
+  }
+});
+
+/**
+ * Manually trigger guest data migration to authenticated user account
+ */
+router.post('/migrate-guest', protect, async (req: AuthRequest, res: Response): Promise<void> => {
+  try {
+    const { guestUserId } = req.body;
+    if (!guestUserId) {
+      res.status(400).json({ error: 'guestUserId is required' });
+      return;
+    }
+    const result = await migrateGuestData(guestUserId, req.user!.id);
+    res.json({ message: 'Guest data migrated successfully', result });
+  } catch (error) {
+    res.status(500).json({ error: (error as Error).message });
+  }
+});
+
 export default router;
+

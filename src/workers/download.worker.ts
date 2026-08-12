@@ -5,6 +5,7 @@ import crypto from 'crypto';
 import { exec } from 'child_process';
 import mongoose from 'mongoose';
 import { GridFSBucket } from 'mongodb';
+import { storageDBConnection } from '../config/db';
 
 dotenv.config();
 
@@ -73,14 +74,15 @@ export async function processDownload(youtube_id: string) {
         .on('error', reject);
     });
 
-    // 3. Upload to MongoDB GridFS
-    console.log(`[Worker] Uploading encrypted audio to GridFS...`);
+    // 3. Upload to MongoDB GridFS Cloud Storage
+    console.log(`[Worker] Uploading encrypted audio to Cloud Storage GridFS...`);
     
-    if (!mongoose.connection.db) {
+    const dbInstance = (storageDBConnection && storageDBConnection.db) ? storageDBConnection.db : mongoose.connection.db;
+    if (!dbInstance) {
         throw new Error('Database connection not established');
     }
     
-    const bucket = new GridFSBucket(mongoose.connection.db, {
+    const bucket = new GridFSBucket(dbInstance, {
       bucketName: 'audio_buffers'
     });
     
