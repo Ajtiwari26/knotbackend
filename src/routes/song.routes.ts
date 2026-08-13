@@ -1,5 +1,6 @@
 import { Router, Request, Response } from 'express';
 import { getSongMetadata, enqueueDownload, syncLocalKnot, getLocalKnot } from '../controllers/song.controller';
+import { protect, AuthRequest } from '../middleware/auth';
 import Song from '../models/Song';
 import mongoose from 'mongoose';
 import { GridFSBucket, ObjectId } from 'mongodb';
@@ -565,6 +566,179 @@ router.get('/local/all-knotted', async (_req: Request, res: Response): Promise<v
 
 router.post('/local/sync', syncLocalKnot);
 router.get('/local/:local_id', getLocalKnot);
+
+// ─── Authenticated Knot Sync ──────────────────────────────────────────────────
+
+/**
+ * Sync knots from client (localStorage / AsyncStorage) to the server.
+ * Accepts an array of knot entries, each tied to a specific source key.
+ * Upserts the Song document and stores per-user knot data.
+ */
+router.post('/sync-knots', protect, async (req: AuthRequest, res: Response): Promise<void> => {
+  try {
+    const userId = req.user?.id;
+    if (!userId) {
+      res.status(401).json({ error: 'Not authenticated' });
+      return;
+    }
+
+    const { knots } = req.body;
+    if (!Array.isArray(knots)) {
+      res.status(400).json({ error: 'knots array is required' });
+      return;
+    }
+
+    let synced = 0;
+    const userObjId = new mongoose.Types.ObjectId(userId);
+
+    for (const entry of knots) {
+      const {
+        source_key,
+        source_type,
+        title,
+        artist,
+        thumbnail,
+        duration_ms,
+        junctions,
+        knot_name,
+        updated_at,
+      } = entry;
+
+      if (!source_key || !source_type || !junctions || junctions.length === 0) continue;
+
+      // Build the filter to find existing song by its unique source key
+      const sourceFilter: Record<string, string> = {};
+      switch (source_type) {
+        case 'youtube': sourceFilter.youtube_id = source_key; break;
+        case 'jiosaavn': sourceFilter.jiosaavn_token = source_key; break;
+        case 'pagalworld': sourceFilter.pagalworld_url = source_key; break;
+        case 'pagalfree': sourceFilter.pagalfree_url = source_key; break;
+        case 'local': sourceFilter.local_id = source_key; break;
+        default: continue;
+      }
+
+      // Upsert the Song document
+      let song = await Song.findOne(sourceFilter);
+      if (!song) {
+        song = await Song.create({
+          ...sourceFilter,
+          title: title || 'Unknown Title',
+          artist: artist || '',
+          thumbnail: thumbnail || '',
+          duration_ms: duration_ms || 0,
+          source: source_type,
+        });
+      } else {
+        // Update metadata if provided
+        if (title && title !== 'Unknown Title') song.title = title;
+        if (artist) song.artist = artist;
+        if (thumbnail) song.thumbnail = thumbnail;
+        if (duration_ms) song.duration_ms = duration_ms;
+        await song.save();
+      }
+
+      // Upsert user's knot data on this song
+      const existingKnotIdx = song.user_knots.findIndex(
+        (uk: any) => uk.user_id.toString() === userId
+      );
+
+      const clientUpdatedAt = updated_at ? new Date(updated_at) : new Date();
+
+      if (existingKnotIdx >= 0) {
+        const existing = song.user_knots[existingKnotIdx];
+        // Only overwrite if client data is newer
+        if (!existing.updated_at || clientUpdatedAt > existing.updated_at) {
+          song.user_knots[existingKnotIdx] = {
+            user_id: userObjId,
+            junctions,
+            knot_name: knot_name || 'My Knot',
+            updated_at: clientUpdatedAt,
+          } as any;
+          await song.save();
+        }
+      } else {
+        song.user_knots.push({
+          user_id: userObjId,
+          junctions,
+          knot_name: knot_name || 'My Knot',
+          updated_at: clientUpdatedAt,
+        } as any);
+        await song.save();
+      }
+
+      synced++;
+    }
+
+    console.log(`[Sync] User ${userId} synced ${synced} knots`);
+    res.json({ synced });
+  } catch (error) {
+    console.error('[Sync] Error:', error);
+    res.status(500).json({ error: (error as Error).message });
+  }
+});
+
+/**
+ * Get all songs with knots belonging to the authenticated user.
+ * Used to pull server knots into client storage after login.
+ */
+router.get('/my-knots', protect, async (req: AuthRequest, res: Response): Promise<void> => {
+  try {
+    const userId = req.user?.id;
+    if (!userId) {
+      res.status(401).json({ error: 'Not authenticated' });
+      return;
+    }
+
+    const userObjId = new mongoose.Types.ObjectId(userId);
+
+    // Find all songs where this user has knot data
+    const songs = await Song.find(
+      { 'user_knots.user_id': userObjId },
+      {
+        youtube_id: 1,
+        jiosaavn_token: 1,
+        pagalworld_url: 1,
+        pagalfree_url: 1,
+        local_id: 1,
+        title: 1,
+        artist: 1,
+        thumbnail: 1,
+        duration_ms: 1,
+        source: 1,
+        user_knots: { $elemMatch: { user_id: userObjId } },
+      }
+    );
+
+    // Transform to a clean response format
+    const result = songs.map((song) => {
+      const userKnot = song.user_knots[0]; // $elemMatch returns at most 1
+      const sourceKey =
+        song.youtube_id ||
+        (song as any).jiosaavn_token ||
+        (song as any).pagalworld_url ||
+        (song as any).pagalfree_url ||
+        (song as any).local_id ||
+        '';
+      return {
+        source_key: sourceKey,
+        source_type: song.source || 'youtube',
+        title: song.title,
+        artist: song.artist,
+        thumbnail: song.thumbnail,
+        duration_ms: song.duration_ms,
+        junctions: userKnot?.junctions || [],
+        knot_name: userKnot?.knot_name || 'My Knot',
+        updated_at: userKnot?.updated_at,
+      };
+    });
+
+    res.json(result);
+  } catch (error) {
+    console.error('[MyKnots] Error:', error);
+    res.status(500).json({ error: (error as Error).message });
+  }
+});
+
 router.get('/:id', getSongMetadata);
 router.post('/:id/download', enqueueDownload);
 
