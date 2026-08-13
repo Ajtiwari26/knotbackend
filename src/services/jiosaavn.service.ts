@@ -121,6 +121,63 @@ export interface JiosaavnSong {
     description?: string;
 }
 
+export interface JiosaavnAlbumResult {
+    title: string;
+    token: string;
+    url: string;
+    imageUrl?: string;
+    artist?: string;
+    year?: string;
+    language?: string;
+    description?: string;
+}
+
+export interface JiosaavnArtistResult {
+    name: string;
+    token: string;
+    url: string;
+    imageUrl?: string;
+    description?: string;
+}
+
+export interface JiosaavnSearchAllResults {
+    topQuery: { type: string; item: JiosaavnSong | JiosaavnAlbumResult | JiosaavnArtistResult } | null;
+    songs: JiosaavnSong[];
+    albums: JiosaavnAlbumResult[];
+    artists: JiosaavnArtistResult[];
+}
+
+export interface JiosaavnAlbumSong {
+    title: string;
+    token: string;
+    url: string;
+    imageUrl?: string;
+    artist?: string;
+    duration_ms: number;
+}
+
+export interface JiosaavnAlbumDetails {
+    title: string;
+    token: string;
+    imageUrl?: string;
+    artist?: string;
+    year?: string;
+    language?: string;
+    songs: JiosaavnAlbumSong[];
+}
+
+export interface JiosaavnArtistDetails {
+    name: string;
+    token: string;
+    imageUrl?: string;
+    followerCount?: number;
+    isVerified?: boolean;
+    bio?: string;
+    topSongs: JiosaavnAlbumSong[];
+    topAlbums: JiosaavnAlbumResult[];
+    singles: JiosaavnAlbumSong[];
+}
+
 export interface JiosaavnMetadata {
     id?: string;
     has_lyrics?: boolean;
@@ -178,7 +235,269 @@ function getDownloadLinks(decryptedUrl: string) {
     ];
 }
 
+function highResImage(imageUrl?: string): string {
+    if (!imageUrl) return '';
+    return imageUrl.replace('150x150', '500x500').replace('50x50', '500x500');
+}
+
+function tokenFromUrl(url?: string): string {
+    if (!url) return '';
+    return url.split('/').pop() || '';
+}
+
+function mapAutocompleteAlbum(album: any): JiosaavnAlbumResult | null {
+    const token = tokenFromUrl(album.url);
+    if (!token) return null;
+    return {
+        title: decodeHTMLEntities(album.title),
+        token,
+        url: album.url,
+        imageUrl: highResImage(album.image),
+        artist: decodeHTMLEntities(album.music || ''),
+        description: decodeHTMLEntities(album.description || '')
+    };
+}
+
+function mapAutocompleteArtist(artist: any): JiosaavnArtistResult | null {
+    const token = tokenFromUrl(artist.url);
+    if (!token) return null;
+    return {
+        name: decodeHTMLEntities(artist.title || artist.name),
+        token,
+        url: artist.url,
+        imageUrl: highResImage(artist.image),
+        description: decodeHTMLEntities(artist.description || '')
+    };
+}
+
+function mapAutocompleteSong(song: any): JiosaavnSong | null {
+    const token = tokenFromUrl(song.url);
+    if (!token) return null;
+    return {
+        title: decodeHTMLEntities(song.title),
+        token,
+        url: song.url,
+        imageUrl: highResImage(song.image),
+        artist: decodeHTMLEntities(song.music || song.description || 'Unknown Artist'),
+        description: decodeHTMLEntities(song.description)
+    };
+}
+
+// Maps a song entry from webapi.get album/artist responses (api_version=4 shape)
+function mapListSong(song: any): JiosaavnAlbumSong | null {
+    const token = tokenFromUrl(song.perma_url);
+    if (!token) return null;
+    const mi = song.more_info || {};
+    let artist = '';
+    const primaryArtists = mi.artistMap?.primary_artists;
+    if (Array.isArray(primaryArtists) && primaryArtists.length > 0) {
+        artist = primaryArtists.map((a: any) => a.name).join(', ');
+    } else if (song.subtitle) {
+        artist = song.subtitle.split(' - ')[0].trim();
+    }
+    const durationSec = parseInt(mi.duration || song.duration) || 0;
+    return {
+        title: decodeHTMLEntities(song.title),
+        token,
+        url: song.perma_url,
+        imageUrl: highResImage(song.image),
+        artist: decodeHTMLEntities(artist || 'Unknown Artist'),
+        duration_ms: durationSec * 1000
+    };
+}
+
+function mapListAlbum(album: any): JiosaavnAlbumResult | null {
+    const token = tokenFromUrl(album.perma_url || album.url);
+    if (!token) return null;
+    const mi = album.more_info || {};
+    return {
+        title: decodeHTMLEntities(album.title || album.name),
+        token,
+        url: album.perma_url || album.url,
+        imageUrl: highResImage(album.image),
+        artist: decodeHTMLEntities(album.subtitle || mi.music || ''),
+        year: mi.year || album.year || undefined,
+        language: mi.language || album.language || undefined
+    };
+}
+
 export class JiosaavnService {
+    /**
+     * Search all entity types (songs, albums, artists) in one call
+     * using the autocomplete api, which returns every section.
+     */
+    static async searchAll(query: string): Promise<JiosaavnSearchAllResults> {
+        const empty: JiosaavnSearchAllResults = { topQuery: null, songs: [], albums: [], artists: [] };
+        try {
+            const searchUrl = `https://www.jiosaavn.com/api.php?__call=autocomplete.get&_format=json&_marker=0&cc=in&includeMetaTags=1&query=${encodeURIComponent(query)}`;
+
+            console.log(`[JiosaavnService] SearchAll: ${query}`);
+            const response = await axios.get(searchUrl, {
+                headers: getRotatedHeaders(query),
+                timeout: 3000
+            });
+
+            const data = response.data;
+            if (!data) return empty;
+
+            const songs = (data.songs?.data || [])
+                .map(mapAutocompleteSong)
+                .filter(Boolean) as JiosaavnSong[];
+            const albums = (data.albums?.data || [])
+                .map(mapAutocompleteAlbum)
+                .filter(Boolean) as JiosaavnAlbumResult[];
+            const artists = (data.artists?.data || [])
+                .map(mapAutocompleteArtist)
+                .filter(Boolean) as JiosaavnArtistResult[];
+
+            let topQuery: JiosaavnSearchAllResults['topQuery'] = null;
+            const top = data.topquery?.data?.[0];
+            if (top) {
+                if (top.type === 'album') {
+                    const item = mapAutocompleteAlbum(top);
+                    if (item) topQuery = { type: 'album', item };
+                } else if (top.type === 'artist') {
+                    const item = mapAutocompleteArtist(top);
+                    if (item) topQuery = { type: 'artist', item };
+                } else if (top.type === 'song') {
+                    const item = mapAutocompleteSong(top);
+                    if (item) topQuery = { type: 'song', item };
+                }
+            }
+
+            return { topQuery, songs, albums, artists };
+        } catch (error) {
+            console.error('[JiosaavnService] SearchAll Error:', (error as Error).message);
+            return empty;
+        }
+    }
+
+    /**
+     * Paginated album search (movie names resolve here too —
+     * a film's soundtrack is an album on JioSaavn).
+     */
+    static async searchAlbums(query: string, page: number = 1, limit: number = 20): Promise<JiosaavnAlbumResult[]> {
+        try {
+            const url = `https://www.jiosaavn.com/api.php?__call=search.getAlbumResults&_format=json&_marker=0&api_version=4&ctx=wap6dot0&n=${limit}&p=${page}&q=${encodeURIComponent(query)}`;
+            const response = await axios.get(url, {
+                headers: getRotatedHeaders(query),
+                timeout: 3000
+            });
+            return (response.data?.results || [])
+                .map(mapListAlbum)
+                .filter(Boolean) as JiosaavnAlbumResult[];
+        } catch (error) {
+            console.error('[JiosaavnService] SearchAlbums Error:', (error as Error).message);
+            return [];
+        }
+    }
+
+    /**
+     * Paginated artist search
+     */
+    static async searchArtists(query: string, page: number = 1, limit: number = 20): Promise<JiosaavnArtistResult[]> {
+        try {
+            const url = `https://www.jiosaavn.com/api.php?__call=search.getArtistResults&_format=json&_marker=0&api_version=4&ctx=wap6dot0&n=${limit}&p=${page}&q=${encodeURIComponent(query)}`;
+            const response = await axios.get(url, {
+                headers: getRotatedHeaders(query),
+                timeout: 3000
+            });
+            return (response.data?.results || [])
+                .map((a: any) => {
+                    const token = tokenFromUrl(a.perma_url || a.url);
+                    if (!token) return null;
+                    return {
+                        name: decodeHTMLEntities(a.name || a.title),
+                        token,
+                        url: a.perma_url || a.url,
+                        imageUrl: highResImage(a.image),
+                        description: decodeHTMLEntities(a.role || '')
+                    };
+                })
+                .filter(Boolean) as JiosaavnArtistResult[];
+        } catch (error) {
+            console.error('[JiosaavnService] SearchArtists Error:', (error as Error).message);
+            return [];
+        }
+    }
+
+    /**
+     * Fetch album details with full track list
+     */
+    static async getAlbumDetails(token: string): Promise<JiosaavnAlbumDetails | null> {
+        try {
+            const url = `https://www.jiosaavn.com/api.php?__call=webapi.get&token=${token}&type=album&includeMetaTags=0&ctx=wap6dot0&api_version=4&_format=json&_marker=0`;
+
+            console.log(`[JiosaavnService] Album Fetching: ${token}`);
+            const response = await axios.get(url, {
+                headers: getRotatedHeaders(token),
+                timeout: 4000
+            });
+
+            const data = response.data;
+            if (!data || !data.title) return null;
+
+            const songs = (Array.isArray(data.list) ? data.list : [])
+                .map(mapListSong)
+                .filter(Boolean) as JiosaavnAlbumSong[];
+
+            return {
+                title: decodeHTMLEntities(data.title),
+                token,
+                imageUrl: highResImage(data.image),
+                artist: decodeHTMLEntities(data.subtitle || data.more_info?.music || ''),
+                year: data.year || undefined,
+                language: data.language || undefined,
+                songs
+            };
+        } catch (error) {
+            console.error('[JiosaavnService] Album Error:', (error as Error).message);
+            return null;
+        }
+    }
+
+    /**
+     * Fetch artist details: top songs, top albums, singles
+     */
+    static async getArtistDetails(token: string, songCount: number = 20, albumCount: number = 10): Promise<JiosaavnArtistDetails | null> {
+        try {
+            const url = `https://www.jiosaavn.com/api.php?__call=webapi.get&token=${token}&type=artist&p=0&n_song=${songCount}&n_album=${albumCount}&includeMetaTags=0&ctx=wap6dot0&api_version=4&_format=json&_marker=0`;
+
+            console.log(`[JiosaavnService] Artist Fetching: ${token}`);
+            const response = await axios.get(url, {
+                headers: getRotatedHeaders(token),
+                timeout: 4000
+            });
+
+            const data = response.data;
+            if (!data || !data.name) return null;
+
+            const topSongs = (data.topSongs || [])
+                .map(mapListSong)
+                .filter(Boolean) as JiosaavnAlbumSong[];
+            const topAlbums = (data.topAlbums || [])
+                .map(mapListAlbum)
+                .filter(Boolean) as JiosaavnAlbumResult[];
+            const singles = (data.singles || [])
+                .map(mapListSong)
+                .filter(Boolean) as JiosaavnAlbumSong[];
+
+            return {
+                name: decodeHTMLEntities(data.name),
+                token,
+                imageUrl: highResImage(data.image),
+                followerCount: parseInt(data.follower_count) || undefined,
+                isVerified: !!data.isVerified,
+                bio: typeof data.bio === 'string' ? data.bio : undefined,
+                topSongs,
+                topAlbums,
+                singles
+            };
+        } catch (error) {
+            console.error('[JiosaavnService] Artist Error:', (error as Error).message);
+            return null;
+        }
+    }
     /**
      * Search songs using JioSaavn autocomplete api
      */

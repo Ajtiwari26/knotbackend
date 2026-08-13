@@ -135,6 +135,110 @@ router.get('/jiosaavn/search', async (req: Request, res: Response): Promise<void
 });
 
 /**
+ * JioSaavn combined search — songs, albums, artists, top result in one call
+ */
+router.get('/jiosaavn/search/all', async (req: Request, res: Response): Promise<void> => {
+  try {
+    const q = req.query.q as string;
+    if (!q || q.trim().length === 0) {
+      res.json({ topQuery: null, songs: [], albums: [], artists: [] });
+      return;
+    }
+    console.log(`[JioSaavn SearchAll] Query: "${q}"`);
+    const results = await JiosaavnService.searchAll(q.trim());
+    console.log(`[JioSaavn SearchAll] songs=${results.songs.length} albums=${results.albums.length} artists=${results.artists.length}`);
+    res.json(results);
+  } catch (error) {
+    console.error('[JioSaavn SearchAll] Error:', error);
+    res.status(500).json({ error: (error as Error).message });
+  }
+});
+
+/**
+ * JioSaavn album search (paginated) — movie soundtracks are albums
+ */
+router.get('/jiosaavn/search/albums', async (req: Request, res: Response): Promise<void> => {
+  try {
+    const q = req.query.q as string;
+    if (!q || q.trim().length === 0) {
+      res.json([]);
+      return;
+    }
+    const page = parseInt(req.query.page as string) || 1;
+    const results = await JiosaavnService.searchAlbums(q.trim(), page);
+    res.json(results);
+  } catch (error) {
+    console.error('[JioSaavn Album Search] Error:', error);
+    res.status(500).json({ error: (error as Error).message });
+  }
+});
+
+/**
+ * JioSaavn artist search (paginated)
+ */
+router.get('/jiosaavn/search/artists', async (req: Request, res: Response): Promise<void> => {
+  try {
+    const q = req.query.q as string;
+    if (!q || q.trim().length === 0) {
+      res.json([]);
+      return;
+    }
+    const page = parseInt(req.query.page as string) || 1;
+    const results = await JiosaavnService.searchArtists(q.trim(), page);
+    res.json(results);
+  } catch (error) {
+    console.error('[JioSaavn Artist Search] Error:', error);
+    res.status(500).json({ error: (error as Error).message });
+  }
+});
+
+/**
+ * JioSaavn album details — full track list
+ */
+router.get('/jiosaavn/album', async (req: Request, res: Response): Promise<void> => {
+  try {
+    const token = req.query.token as string;
+    if (!token) {
+      res.status(400).json({ error: 'Token is required' });
+      return;
+    }
+    const album = await JiosaavnService.getAlbumDetails(token);
+    if (!album) {
+      res.status(404).json({ error: 'Album not found' });
+      return;
+    }
+    res.json(album);
+  } catch (error) {
+    console.error('[JioSaavn Album] Error:', error);
+    res.status(500).json({ error: (error as Error).message });
+  }
+});
+
+/**
+ * JioSaavn artist details — top songs, albums, singles
+ */
+router.get('/jiosaavn/artist', async (req: Request, res: Response): Promise<void> => {
+  try {
+    const token = req.query.token as string;
+    if (!token) {
+      res.status(400).json({ error: 'Token is required' });
+      return;
+    }
+    const songCount = parseInt(req.query.songs as string) || 20;
+    const albumCount = parseInt(req.query.albums as string) || 10;
+    const artist = await JiosaavnService.getArtistDetails(token, songCount, albumCount);
+    if (!artist) {
+      res.status(404).json({ error: 'Artist not found' });
+      return;
+    }
+    res.json(artist);
+  } catch (error) {
+    console.error('[JioSaavn Artist] Error:', error);
+    res.status(500).json({ error: (error as Error).message });
+  }
+});
+
+/**
  * JioSaavn metadata extraction
  */
 router.get('/jiosaavn/metadata', async (req: Request, res: Response): Promise<void> => {
