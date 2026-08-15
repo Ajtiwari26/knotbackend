@@ -374,6 +374,30 @@ router.get('/search', async (req: Request, res: Response): Promise<void> => {
 const IN_MEMORY_CACHE = new Map<string, { url: string, expires: number }>();
 
 /**
+ * Repair artwork omitted by older client syncs. The existing provider-specific
+ * ID is never changed, so metadata cannot be applied to another song.
+ */
+async function backfillMissingArtwork(song: InstanceType<typeof Song>): Promise<void> {
+  if (song.thumbnail) return;
+
+  let thumbnail = '';
+  if (song.source === 'youtube' && song.youtube_id) {
+    thumbnail = `https://i.ytimg.com/vi/${song.youtube_id}/hqdefault.jpg`;
+  } else if (song.source === 'jiosaavn' && song.jiosaavn_token) {
+    const metadata = await JiosaavnService.getSongMetadata(song.jiosaavn_token);
+    thumbnail = metadata?.imageUrl || '';
+  } else if (song.source === 'pagalfree' && song.pagalfree_url) {
+    const metadata = await PagalfreeService.getSongMetadata(song.pagalfree_url);
+    thumbnail = metadata?.imageUrl || '';
+  }
+
+  if (thumbnail) {
+    song.thumbnail = thumbnail;
+    await song.save();
+  }
+}
+
+/**
  * Get stream URL for a YouTube video.
  * REPLACED REDIS: Now uses ONLY in-memory cache to stay under Upstash limits.
  */
@@ -428,15 +452,24 @@ router.get('/:id/stream-url', async (req: Request, res: Response): Promise<void>
   }
 });
 
+function extractYoutubeId(input: string): string | null {
+  if (!input) return null;
+  if (/^[a-zA-Z0-9_-]{11}$/.test(input)) return input;
+  const match = input.match(/(?:youtu\.be\/|youtube\.com\/(?:embed\/|v\/|watch\?v=|watch\?.+&v=))([\w-]{11})/);
+  if (match && match[1]) return match[1];
+  return null;
+}
+
 /**
  * HTTP audio proxy.
  * REPLACED REDIS: Redis calls removed to avoid request limit errors.
  */
 router.get('/:id/stream', async (req: Request, res: Response): Promise<void> => {
-  const id = req.params.id as string;
+  const rawId = req.params.id as string;
+  const id = extractYoutubeId(rawId) || rawId;
   const clientStreamUrl = req.query.stream_url as string;
   
-  console.log(`[Stream] Proxying audio for video: ${id}`);
+  console.log(`[Stream] Proxying audio for video: ${id} (raw: ${rawId})`);
 
   try {
     let audioUrl: string | null = null;
@@ -498,25 +531,15 @@ function proxyAudioUrl(
   const mod = url.startsWith('https') ? require('https') : require('http');
   const parsedUrl = new URL(url);
 
-  const userAgents = [
-    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-    'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36',
-    'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/118.0.0.0 Safari/537.36',
-    'Mozilla/5.0 (iPhone; CPU iPhone OS 16_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.6 Mobile/15E148 Safari/604.1'
-  ];
-  const randomUA = userAgents[Math.floor(Math.random() * userAgents.length)];
-
   const options: any = {
     hostname: parsedUrl.hostname,
     port: parsedUrl.port,
     path: parsedUrl.pathname + parsedUrl.search,
     method: 'GET',
     headers: {
-      'User-Agent': randomUA,
-      'Referer': 'https://www.youtube.com/',
-      'Origin': 'https://www.youtube.com',
+      'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
       'Accept': '*/*',
-      'Connection': 'keep-alive'
+      'Connection': 'keep-alive',
     },
   };
 
@@ -541,6 +564,12 @@ function proxyAudioUrl(
     }
 
     res.status(statusCode);
+    res.setHeader('Access-Control-Allow-Origin', '*');
+    res.setHeader('Access-Control-Allow-Headers', '*');
+    res.setHeader('Access-Control-Allow-Methods', 'GET, HEAD, OPTIONS');
+    res.setHeader('Cross-Origin-Resource-Policy', 'cross-origin');
+    res.setHeader('Cross-Origin-Embedder-Policy', 'unsafe-none');
+
     const forward = ['content-type', 'content-length', 'content-range', 'accept-ranges'];
     for (const h of forward) {
       if (upstream.headers[h]) {
@@ -710,14 +739,24 @@ router.post('/sync-knots', protect, async (req: AuthRequest, res: Response): Pro
 
       if (!source_key || !source_type || !junctions || junctions.length === 0) continue;
 
+      let cleanKey = source_key;
+      let cleanThumbnail = thumbnail || '';
+      if (source_type === 'youtube') {
+        const ytId = extractYoutubeId(source_key);
+        if (ytId) cleanKey = ytId;
+        if (!cleanThumbnail && cleanKey) {
+          cleanThumbnail = `https://i.ytimg.com/vi/${cleanKey}/hqdefault.jpg`;
+        }
+      }
+
       // Build the filter to find existing song by its unique source key
       const sourceFilter: Record<string, string> = {};
       switch (source_type) {
-        case 'youtube': sourceFilter.youtube_id = source_key; break;
-        case 'jiosaavn': sourceFilter.jiosaavn_token = source_key; break;
-        case 'pagalworld': sourceFilter.pagalworld_url = source_key; break;
-        case 'pagalfree': sourceFilter.pagalfree_url = source_key; break;
-        case 'local': sourceFilter.local_id = source_key; break;
+        case 'youtube': sourceFilter.youtube_id = cleanKey; break;
+        case 'jiosaavn': sourceFilter.jiosaavn_token = cleanKey; break;
+        case 'pagalworld': sourceFilter.pagalworld_url = cleanKey; break;
+        case 'pagalfree': sourceFilter.pagalfree_url = cleanKey; break;
+        case 'local': sourceFilter.local_id = cleanKey; break;
         default: continue;
       }
 
@@ -728,7 +767,7 @@ router.post('/sync-knots', protect, async (req: AuthRequest, res: Response): Pro
           ...sourceFilter,
           title: title || 'Unknown Title',
           artist: artist || '',
-          thumbnail: thumbnail || '',
+          thumbnail: cleanThumbnail,
           duration_ms: duration_ms || 0,
           source: source_type,
         });
@@ -736,7 +775,7 @@ router.post('/sync-knots', protect, async (req: AuthRequest, res: Response): Pro
         // Update metadata if provided
         if (title && title !== 'Unknown Title') song.title = title;
         if (artist) song.artist = artist;
-        if (thumbnail) song.thumbnail = thumbnail;
+        if (cleanThumbnail) song.thumbnail = cleanThumbnail;
         if (duration_ms) song.duration_ms = duration_ms;
         await song.save();
       }
@@ -812,6 +851,10 @@ router.get('/my-knots', protect, async (req: AuthRequest, res: Response): Promis
         user_knots: { $elemMatch: { user_id: userObjId } },
       }
     );
+
+    // Older clients synced loop geometry but not artwork. Restore artwork
+    // against each record's own stable source key before returning it.
+    await Promise.all(songs.map((song) => backfillMissingArtwork(song)));
 
     // Transform to a clean response format
     const result = songs.map((song) => {
